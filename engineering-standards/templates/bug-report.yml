@@ -1,0 +1,50 @@
+# Place at .github/ISSUE_TEMPLATE/bug-report.yml
+name: Bug report
+description: Something is broken or behaving unexpectedly
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences. What's broken?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, report IDs, and Copy Debug output where available.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "app version, browser/OS, account type (consumer/Workspace)"
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Initial investigation (optional)
+      description: Anything already dug up. Ongoing investigation goes in comments, not edits to this body.
+    validations:
+      required: false

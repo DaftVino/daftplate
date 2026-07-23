@@ -1,0 +1,2 @@
+# Committed twin of the gitignored .dev.vars (Cloudflare local secrets).
+# Names only — never values. Mirror every name into the Pages project settings.

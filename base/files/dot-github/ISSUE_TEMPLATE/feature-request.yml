@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose new functionality or an enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is painful or impossible today? Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should happen instead? Rough is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else would solve this, and why is it worse?
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Small — fits in one PR
+        - Medium — a few PRs, no design doc
+        - Large — needs a design doc first
+    validations:
+      required: true

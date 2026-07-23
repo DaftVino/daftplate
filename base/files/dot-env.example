@@ -1,0 +1,2 @@
+# Committed twin of the gitignored .env (repo-standards §2.1).
+# List every environment variable this project reads. Names only — never values.

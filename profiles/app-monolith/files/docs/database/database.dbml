@@ -1,0 +1,11 @@
+// Canonical schema for this repo, in DBML (https://dbml.dbdiagram.io/docs/).
+// This file DESCRIBES the schema; the migrations DEFINE it. Regenerate from the
+// migrated database — never hand-edit a table here to change the schema.
+//
+// Per-domain ERDs live beside this file as <domain>-erd.md, added by the
+// database-schema skill. Add tables below as domains are built.
+
+Project app_monolith {
+  database_type: 'PostgreSQL'
+  Note: 'Engine-agnostic core; Postgres-first.'
+}

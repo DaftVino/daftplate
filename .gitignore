@@ -7,3 +7,4 @@ Thumbs.db
 !.env.example
 .claude.local.md
 scratch/
+.gstack/

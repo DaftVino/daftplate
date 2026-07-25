@@ -196,6 +196,7 @@ These five ship inside the `app-monolith` profile's files and land in a scaffold
 | insist | user-level | Hard-gate every user question so it's answered by the user, never auto-decided | v1.0 portable |
 | new-project | user-level | Scaffold a standards-compliant repo from base + one profile overlay | daftplate-only (the scaffolding engine) |
 | orient | user-level | Emit a short session-start brief on repo state | v1.0 portable |
+| diagram | user-level | Analyze a repo through a lens and render an editable `.excalidraw` (structure working board / flowchart / ER / sequence) | daftplate-only (until proven) |
 | architecture-audit | repo-scoped (app-monolith) | Read-only drift audit of docs against the code | repo-scoped (app-monolith only) |
 | architecture-docs | repo-scoped (app-monolith) | Maintain small, linked C4-style Mermaid architecture views | repo-scoped (app-monolith only) |
 | database-schema | repo-scoped (app-monolith) | Migrate the schema additively and keep the DBML/ERDs current | repo-scoped (app-monolith only) |

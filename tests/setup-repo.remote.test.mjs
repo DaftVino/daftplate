@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyRemote, ghJson, main, probeRemote, remoteSettings } from '../scripts/setup-repo.mjs';
+import { applyRemote, availableCheckContexts, ghJson, main, probeRemote, remoteSettings } from '../scripts/setup-repo.mjs';
+import { makeRepo } from './helpers/make-repo.mjs';
 
 const fakeRun = (responses) => (args) => {
   const key = args.join(' ');
@@ -146,6 +147,42 @@ test('applyRemote reports a failed call without throwing, and keeps going', () =
   assert.equal(results.find((r) => r.id === 'branch-protection').status, 'failed');
   assert.match(results.find((r) => r.id === 'branch-protection').detail, /422/);
   assert.equal(results.find((r) => r.id === 'delete-branch-on-merge').status, 'applied');
+});
+
+test('availableCheckContexts returns the job contexts a repo actually ships', () => {
+  const repo = makeRepo({
+    '.github/workflows/ci.yml': 'name: ci\non:\n  push:\njobs:\n  test:\n    runs-on: x\n  secrets:\n    runs-on: x\n',
+  });
+  assert.deepEqual(availableCheckContexts(repo).sort(), ['secrets', 'test']);
+});
+
+test('availableCheckContexts is empty when the repo ships no workflows', () => {
+  assert.deepEqual(availableCheckContexts(makeRepo({ 'README.md': 'x' })), []);
+});
+
+test('availableCheckContexts requires only the jobs that exist', () => {
+  const repo = makeRepo({ '.github/workflows/ci.yml': 'jobs:\n  test:\n    runs-on: x\n' });
+  assert.deepEqual(availableCheckContexts(repo), ['test']);
+});
+
+test('applyRemote requires only the check contexts it is given', () => {
+  const calls = [];
+  const run = (args) => { calls.push(args.join(' ')); return { status: 0, stdout: '{}', stderr: '' }; };
+  applyRemote(publicProbe, { run, contexts: ['test'] });
+  const prot = calls.find((c) => c.includes('branches/main/protection'));
+  assert.match(prot, /required_status_checks\[contexts\]\[\]=test/);
+  assert.doesNotMatch(prot, /contexts\]\[\]=secrets/);
+});
+
+test('applyRemote requires no status checks when given none (a check-less repo)', () => {
+  const calls = [];
+  const run = (args) => { calls.push(args.join(' ')); return { status: 0, stdout: '{}', stderr: '' }; };
+  applyRemote(publicProbe, { run, contexts: [] });
+  const prot = calls.find((c) => c.includes('branches/main/protection'));
+  assert.match(prot, /required_status_checks=null/);
+  assert.doesNotMatch(prot, /contexts\]\[\]/);
+  // still requires a PR — direct pushes to main stay blocked
+  assert.match(prot, /required_pull_request_reviews/);
 });
 
 const remoteRun = (responses) => (args) => {

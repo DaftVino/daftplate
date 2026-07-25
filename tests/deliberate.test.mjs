@@ -28,9 +28,10 @@ test('round 1 prompts carry no peer arguments', () => {
   assert.equal(p.includes('what the others argued'), false);
 });
 
-test('default models are mid-tier and never max or ultra-high', () => {
-  for (const model of Object.values(DEFAULT_MODELS)) {
-    assert.match(model, /^(terra|sol)-med$/, `${model} is not a permitted default`);
+test('default models are real codex ids at medium effort, never max or ultra-high', () => {
+  for (const { model, effort } of Object.values(DEFAULT_MODELS)) {
+    assert.match(model, /^gpt-[\d.]+-(terra|sol)$/, `${model} is not a permitted default`);
+    assert.equal(effort, 'medium');
   }
 });
 

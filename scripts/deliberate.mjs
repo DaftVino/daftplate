@@ -11,7 +11,15 @@ import { runCli } from './lib/cli.mjs';
 
 // Mid-tier by default. A max or ultra-high model is only ever used when the
 // user has explicitly asked for it; the chair may ask, but never assumes.
-export const DEFAULT_MODELS = { native: 'terra-med', veteran: 'terra-med', aesthete: 'sol-med' };
+// The bare names ("terra") are rejected by codex exec — pass the full id via
+// -m plus -c 'model_reasoning_effort="medium"'. Ids follow the naming in
+// ~/.codex/config.toml (verified 2026-07-24 on codex-cli 0.145: gpt-5.6-*);
+// when codex bumps the version, read the config for the current family.
+export const DEFAULT_MODELS = {
+  native: { model: 'gpt-5.6-terra', effort: 'medium' },
+  veteran: { model: 'gpt-5.6-terra', effort: 'medium' },
+  aesthete: { model: 'gpt-5.6-sol', effort: 'medium' },
+};
 
 export const ARCHETYPES = [
   {

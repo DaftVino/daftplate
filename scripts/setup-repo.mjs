@@ -3,7 +3,7 @@
 // Detects tools; never installs them. --remote applies the GitHub-side settings
 // the repo's plan and visibility allow, and reports the rest with the reason.
 // Usage: node scripts/setup-repo.mjs <repo> [--check] [--force]
-import { existsSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { violation, reportViolations, runCli } from './lib/cli.mjs';
@@ -112,25 +112,47 @@ export function remoteSettings(probe) {
   ];
 }
 
+// A required status-check context is a CI job id — a two-space-indented `<id>:`
+// under `jobs:` in a workflow file. Require only the contexts the repo actually
+// ships: a repo with no matching workflow (e.g. the skills-only daftkit export)
+// would otherwise have its `main` require a check that never reports, blocking
+// every PR forever — with enforce_admins on, unrecoverably.
+export function availableCheckContexts(repoDir, candidates = ['test', 'secrets']) {
+  const dir = join(repoDir, '.github', 'workflows');
+  if (!existsSync(dir)) return [];
+  const text = readdirSync(dir)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .map((f) => readFileSync(join(dir, f), 'utf8'))
+    .join('\n');
+  return candidates.filter((ctx) => new RegExp(`^  ${ctx}:`, 'm').test(text));
+}
+
 // One gh invocation per setting. Each is idempotent: re-running --remote on an
 // already-configured repo re-asserts the same state rather than toggling it.
 const REMOTE_CALLS = {
   'delete-branch-on-merge': (slug) => [
     'api', '--method', 'PATCH', `repos/${slug}`, '-f', 'delete_branch_on_merge=true',
   ],
-  'branch-protection': (slug) => [
-    'api', '--method', 'PUT', `repos/${slug}/branches/main/protection`,
-    '-F', 'required_pull_request_reviews[required_approving_review_count]=0',
-    '-F', 'required_status_checks[strict]=true',
-    '-f', 'required_status_checks[contexts][]=test',
-    '-f', 'required_status_checks[contexts][]=secrets',
+  'branch-protection': (slug, opts = {}) => {
+    const contexts = opts.contexts ?? [];
+    const args = [
+      'api', '--method', 'PUT', `repos/${slug}/branches/main/protection`,
+      '-F', 'required_pull_request_reviews[required_approving_review_count]=0',
+    ];
+    if (contexts.length) {
+      args.push('-F', 'required_status_checks[strict]=true');
+      for (const ctx of contexts) args.push('-f', `required_status_checks[contexts][]=${ctx}`);
+    } else {
+      // No CI job produces a check here — require the PR, not a phantom check.
+      args.push('-F', 'required_status_checks=null');
+    }
     // enforce_admins=true, deliberately. repo-standards §9.7 says "require a PR
     // (even solo)", and on a repo whose only member is an admin, exempting
     // admins means the rule binds nobody while --remote still reports it
     // applied. The escape hatch is printed in the report below.
-    '-F', 'enforce_admins=true',
-    '-F', 'restrictions=null',
-  ],
+    args.push('-F', 'enforce_admins=true', '-F', 'restrictions=null');
+    return args;
+  },
   'secret-scanning': (slug) => [
     'api', '--method', 'PATCH', `repos/${slug}`,
     '-f', 'security_and_analysis[secret_scanning][status]=enabled',
@@ -153,7 +175,7 @@ export function applyRemote(probe, opts = {}) {
     if (opts.dryRun) {
       return { id: setting.id, label: setting.label, status: 'skipped', detail: 'dry run' };
     }
-    const { status, stderr } = run(REMOTE_CALLS[setting.id](probe.slug));
+    const { status, stderr } = run(REMOTE_CALLS[setting.id](probe.slug, opts));
     return status === 0
       ? { id: setting.id, label: setting.label, status: 'applied', detail: '' }
       : { id: setting.id, label: setting.label, status: 'failed', detail: stderr.trim() };
@@ -225,9 +247,11 @@ function main(argv, run = ghRun) {
       console.error('no GitHub remote found for this repo — create one first, or run without --remote');
       return 1;
     }
+    const contexts = availableCheckContexts(repo);
     const results = applyRemote(probeRemote(slug, inRepo), {
       run: inRepo,
       dryRun: args.includes('--dry-run'),
+      contexts,
     });
 
     for (const group of ['applied', 'skipped', 'failed', 'unavailable']) {
@@ -238,6 +262,9 @@ function main(argv, run = ghRun) {
     }
     if (results.some((r) => r.id === 'branch-protection' && r.status === 'applied')) {
       console.log('\nbranch protection now applies to admins too (repo-standards §9.7, "even solo").');
+      console.log(contexts.length
+        ? `Required status checks on main: ${contexts.join(', ')}.`
+        : 'No status checks required on main — this repo ships no workflows, so main requires a PR only.');
       console.log('Emergency unprotect, if main is broken and a PR cannot land:');
       console.log(`  gh api --method DELETE repos/${slug}/branches/main/protection`);
       console.log('Re-apply by running this command again.');

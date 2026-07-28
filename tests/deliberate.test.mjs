@@ -1,6 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ARCHETYPES, buildPrompt, DEFAULT_MODELS, isLooping, nextAction } from '../scripts/deliberate.mjs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ARCHETYPES, buildPrompt, buildTargetedPrompt, DEFAULT_MODELS, isLooping, nextAction } from '../scripts/deliberate.mjs';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+// A panel costs six figures of tokens. The step that makes it reusable is the
+// record, and a step that lives only in prose is a step that gets skipped — so
+// the skill is held to naming the destination and the falsifier discipline.
+test('the deliberate SKILL.md requires the panel to be recorded', () => {
+  const skill = readFileSync(join(ROOT, 'skills', 'deliberate', 'SKILL.md'), 'utf8');
+  assert.match(skill, /docs\/panels\/YYYY-MM-DD-slug\.md/, 'the record has no named destination');
+  assert.match(skill, /falsifiers, not opinions/i, 'revisit triggers must be framed as falsifiers');
+  assert.match(skill, /## 8\./, 'the record step must be a numbered step, not an aside');
+});
+
+// Every record carries the triggers table; without it the file is a transcript,
+// not something a later session can act on.
+test('every panel record states its revisit triggers', () => {
+  const dir = join(ROOT, 'docs', 'panels');
+  const records = readdirSync(dir).filter((f) => f.endsWith('.md'));
+  assert.ok(records.length > 0, 'docs/panels exists but holds no record');
+
+  for (const name of records) {
+    const text = readFileSync(join(dir, name), 'utf8');
+    assert.match(text, /^## Revisit triggers$/m, `${name}: no revisit triggers section`);
+    assert.match(text, /^## What moved/m, `${name}: does not record what moved`);
+  }
+});
 
 test('there are exactly three archetypes, each with a distinct stance', () => {
   assert.equal(ARCHETYPES.length, 3);
@@ -25,6 +54,26 @@ test('buildPrompt embeds the topic and the round context', () => {
 
 test('round 1 prompts carry no peer arguments', () => {
   const p = buildPrompt(ARCHETYPES[0], { topic: 'T', round: 1, others: [] });
+  assert.equal(p.includes('what the others argued'), false);
+});
+
+test('a targeted round carries the disputes and forbids a re-file', () => {
+  const p = buildTargetedPrompt(ARCHETYPES[1], {
+    topic: 'Should we drop the code map?',
+    round: 2,
+    disputes: ['whether the map earns its refresh cost', 'who owns staleness'],
+    others: ['native said X'],
+  });
+
+  assert.match(p, /1\. whether the map earns its refresh cost/);
+  assert.match(p, /2\. who owns staleness/);
+  assert.match(p, /do NOT re-file/i);
+  assert.match(p, /change one of your conclusions or cite new/i);
+  assert.match(p, /native said X/);
+});
+
+test('a targeted round works with no peer arguments supplied', () => {
+  const p = buildTargetedPrompt(ARCHETYPES[0], { topic: 'T', round: 2, disputes: ['d'] });
   assert.equal(p.includes('what the others argued'), false);
 });
 

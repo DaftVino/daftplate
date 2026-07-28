@@ -7,13 +7,16 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, chmodSync } from 
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { violation, reportViolations, runCli } from './lib/cli.mjs';
+import { TOOLCHAIN } from './lib/toolchain.mjs';
+import { commandExists } from './lib/probe.mjs';
+import { advisory, inspect, resolveProfile } from './check-machine.mjs';
 
-export const PREREQUISITES = [
-  { command: 'git', why: 'version control', install: 'winget install Git.Git' },
-  { command: 'gh', why: 'issues, PRs, releases', install: 'winget install GitHub.cli' },
-  { command: 'node', why: 'the scripts in this repo', install: 'winget install OpenJS.NodeJS.LTS' },
-  { command: 'gitleaks', why: 'pre-commit secret scanning (repo-standards §2.1)', install: 'winget install Gitleaks.Gitleaks' },
-];
+// Derived, never declared: scripts/lib/toolchain.mjs is the one source of truth
+// for what this machine is expected to have. The filter is `blocksScripts` and
+// not `tier` — restic and codex are `required` (a machine of yours is
+// misconfigured without them) yet nothing in this repo breaks when they are
+// absent, and blocking repo bootstrap on a backup tool would be wrong.
+export const PREREQUISITES = TOOLCHAIN.filter((t) => t.blocksScripts);
 
 // `gh project` needs a scope the default login does not grant.
 export const GH_SCOPES = [
@@ -33,9 +36,8 @@ const HOOK = [
   '',
 ].join('\n');
 
-export function commandExists(command) {
-  return spawnSync(command, ['--version'], { shell: true, stdio: 'ignore' }).status === 0;
-}
+// Re-exported: it lived here first and other modules import it from here.
+export { commandExists };
 
 export function ghScopes() {
   const result = spawnSync('gh', ['auth', 'status'], { shell: true, encoding: 'utf8' });
@@ -45,8 +47,8 @@ export function ghScopes() {
 /** Default runner. Injected in tests so nothing here ever touches the network.
  *  `cwd` matters: `gh repo view` resolves the slug from the working directory's
  *  git remote, and the repo under setup is frequently not the process cwd. */
-export const ghRun = (args, cwd) => {
-  const r = spawnSync('gh', args, { shell: true, encoding: 'utf8', cwd });
+export const ghRun = (args, cwd, input) => {
+  const r = spawnSync('gh', args, { shell: true, encoding: 'utf8', cwd, input });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
@@ -129,7 +131,7 @@ export function availableCheckContexts(repoDir, candidates = ['test', 'secrets']
 
 // One gh invocation per setting. Each is idempotent: re-running --remote on an
 // already-configured repo re-asserts the same state rather than toggling it.
-const REMOTE_CALLS = {
+export const REMOTE_CALLS = {
   'delete-branch-on-merge': (slug) => [
     'api', '--method', 'PATCH', `repos/${slug}`, '-f', 'delete_branch_on_merge=true',
   ],
@@ -184,7 +186,7 @@ export function applyRemote(probe, opts = {}) {
 
 export function checkPrerequisites(resolve = commandExists, scopes = ghScopes) {
   const violations = PREREQUISITES
-    .filter((p) => !resolve(p.command))
+    .filter((p) => !resolve(p.command, p.versionArgs))
     .map((p) => violation('prerequisite', p.command, `not on PATH — needed for ${p.why}. Install: ${p.install}`));
 
   if (resolve('gh')) {
@@ -230,7 +232,7 @@ export function setupRepo(repoDir, opts = {}) {
   return { hook, violations: checkRepoSetup(repoDir, opts) };
 }
 
-function main(argv, run = ghRun) {
+function main(argv, run = ghRun, opts = {}) {
   const args = argv.slice(2);
   const repo = args.find((a) => !a.startsWith('--'));
   if (!repo) {
@@ -241,7 +243,9 @@ function main(argv, run = ghRun) {
 
   if (args.includes('--remote')) {
     // Resolve the slug from the target repo's remote, not the process cwd.
-    const inRepo = (a) => run(a, repo);
+    // Arity matters: a forwarder that drops trailing arguments silently changes
+    // the call it forwards, which cost this file a real defect once already.
+    const inRepo = (a, _cwd, input) => run(a, repo, input);
     const slug = ghJson(['repo', 'view', '--json', 'nameWithOwner'], inRepo)?.nameWithOwner;
     if (!slug) {
       console.error('no GitHub remote found for this repo — create one first, or run without --remote');
@@ -277,13 +281,30 @@ function main(argv, run = ghRun) {
     return results.some((r) => r.status === 'failed') ? 1 : 0;
   }
 
-  const { hook, violations } = setupRepo(repo, { force: args.includes('--force') });
+  const { hook, violations } = setupRepo(repo, {
+    force: args.includes('--force'),
+    resolve: opts.resolve,
+    scopes: opts.scopes,
+  });
   const note = {
     installed: 'pre-commit hook installed',
     present: 'pre-commit hook already present (use --force to replace)',
     'no-git-dir': 'no .git/hooks — run git init first',
   }[hook];
   console.log(note);
+
+  // One advisory line, printed before the violations so it cannot bury them and
+  // never contributing to the exit code. This is the recurring trigger the panel
+  // picked: setup-repo already runs once per new repo, so the manifest gets
+  // looked at without anyone having to remember a separate command. The repo's
+  // own .daftplate.json supplies the profile, so a gas-webapp repo hears about
+  // clasp and nothing else does.
+  const advice = advisory(inspect({
+    probe: opts.resolve ?? commandExists,
+    profile: resolveProfile(args, repo),
+  }));
+  if (advice) console.log(advice);
+
   return reportViolations(violations);
 }
 

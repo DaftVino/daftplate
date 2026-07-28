@@ -3,17 +3,27 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installSkills } from '../scripts/install-skills.mjs';
 
-const SKILLS = join(fileURLToPath(new URL('..', import.meta.url)), 'skills');
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const SKILLS = join(ROOT, 'skills');
 
-const names = readdirSync(SKILLS, { withFileTypes: true })
+const dirs = readdirSync(SKILLS, { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .map((e) => e.name);
 
-test('every skill directory holds a SKILL.md', () => {
-  for (const name of names) {
-    assert.equal(existsSync(join(SKILLS, name, 'SKILL.md')), true, `${name} has no SKILL.md`);
-  }
+// A skill is a directory that holds a SKILL.md. A directory without one is a
+// skill under construction — bundled scripts land in one phase and the SKILL.md
+// in the next — and the installer must skip it whole rather than install half of
+// it into ~/.claude/skills/.
+const names = dirs.filter((name) => existsSync(join(SKILLS, name, 'SKILL.md')));
+
+test('a skill directory with no SKILL.md installs nothing, and says which one it skipped', () => {
+  const unbuilt = dirs.filter((name) => !names.includes(name));
+  const result = installSkills(ROOT, join(ROOT, 'this-target-is-never-written'), { dryRun: true });
+
+  assert.deepEqual(result.installed, [...names].sort());
+  assert.deepEqual(result.skipped, unbuilt.sort());
 });
 
 test('every SKILL.md opens with frontmatter whose name matches its directory', () => {

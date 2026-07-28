@@ -8,3 +8,7 @@ Thumbs.db
 .claude.local.md
 scratch/
 .gstack/
+.crit/
+
+# subagent-driven-development scratch: ledgers, briefs, review packages
+.superpowers/

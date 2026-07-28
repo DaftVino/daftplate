@@ -35,6 +35,30 @@ repos that need them.
 
 **daftkit disposition:** deferred to v1.1 (needs script vendoring)
 
+### continuum
+
+**Purpose:** Hand the current chat off and write the prompt that forces the next one's first moves. Delegates the exit note to `/handoff` whole; owns only the next-session prompt and the gate that refuses it.
+
+**Invocation:** `/continuum`, "handoff and start a fresh chat", "I'm going to clear", "write the prompt for the next session", "next session prompt", or "pick up the next task".
+
+**Inputs / outputs:** Invokes `/handoff` first, then assembles a six-section prompt (`Start here`, `Read first`, `Branch`, `Constraints`, `Exit criteria`, `Unknowns and risks`) from real repo state — `git branch`, the code map's staleness, `git status --porcelain` — and runs it through `skills/continuum/scripts/validate-prompt.mjs` before anything reaches disk. A valid prompt is written to `docs/designs/next-session-prompt.md`, printed verbatim, and committed.
+
+**Failure modes:** Three terminal states, and only three. `CONTINUUM_BLOCKED_VALIDATION` — still invalid after one regeneration; writes and commits nothing, prints the violations for manual repair. `CONTINUUM_UNCOMMITTED` — valid, on disk and already printed, but the commit failed; deliberately neither blocked nor success, since the file exists but a `/clear` plus a branch switch would lose it. `CONTINUUM_COMMITTED` — the clean exit. A fourth path is not a terminal state at all: if `/handoff` fails in a way the skill could not work around, it stops and reports rather than generating a prompt — a prompt pointing at a note nobody wrote is worse than no prompt.
+
+**daftkit disposition:** held (until a real session runs a generated prompt end to end)
+
+### crit
+
+**Purpose:** Design critique that cannot file a judgement it did not look at. Owns an evidence manifest and five checks that exist nowhere upstream; delegates the canonical critique doctrine to `impeccable`'s `critique` playbook by reference rather than restating it.
+
+**Invocation:** `/crit`, "critique this design", "is this generic", "does this look templated", or a request for an identity/craft judgement that has to be evidenced rather than asserted.
+
+**Inputs / outputs:** Probes for `~/.claude/skills/impeccable/reference/critique.md` and **reads** it — invoking `impeccable` by name is not loading its playbook, and that conflation is the measured failure this skill exists to stop. Then P0 preflight (stop rule, evidence plan, reversal cost, and the five-axis triage shared with `/deliberate`), and L1 derived identity, L2 layered taxonomy and P4 restraint *inside* the playbook's Assessment A — not as separate agents, since these are rules rather than conflicting values. Writes `{ manifest, findings }` to `.crit/evidence.json` and runs the bundled `scripts/manifest.mjs`: exit 0 clean, 1 for refusals or an incomplete trail, 2 for an unusable file. Any `⚠️ DEGRADED` banner the validator emits becomes the report's first line.
+
+**Failure modes:** An appearance finding with no rendering is **refused**, not caveated; so is a comparative appearance claim without the variants it compares, and a finding that states no `kind` — the gate fails closed, so relabelling an appearance claim as structural to slip past it has to be typed deliberately. Non-perceptual findings (spec contradictions, accessibility violations, structural defects) pass through untouched and ship even when visual review is blocked. A missing detector or daftplate-owned check **degrades** the run and never refuses a finding; a `non-viewable` classification is accepted only with a stated justification, and then admits appearance findings while still degrading the run. One honest gap: with the playbook absent but a rendering in hand the validator exits 0 with a banner — preventing a chair from *skipping* step 0 is not something a SKILL.md can do, which is what the hook is for. That hook (`~/.claude/crit-report-gate.mjs`, registered user-level on `Stop`) blocks a session that invoked `/crit` and finished without a **complete** manifest; it calls `validateManifest`, so findings are not in its input and it cannot rule on a judgement even by accident. It detects the run by parsing specific transcript fields, never by matching substrings — a session that merely *writes about* crit contains every marker, and three successive regex attempts each blocked the session that wrote them.
+
+**daftkit disposition:** held (3–0 in both panel rounds — needs an explicit dependency manifest, startup validation, and a tested degraded mode)
+
 ### curious
 
 **Purpose:** Dial clarifying-question frequency moderately above default for the session — noticeably more, not maximal.
@@ -53,9 +77,9 @@ repos that need them.
 
 **Invocation:** `/deliberate`, "convene the panel", "argue this out", or a request for deep multi-perspective review of a decision.
 
-**Inputs / outputs:** Takes a neutral one-paragraph topic framing plus the relevant plan/code inline (Codex cannot read repo files itself). Uses `buildPrompt`/`nextAction` from `$TEMPLATES/scripts/deliberate.mjs`, piping each round's prompt to `codex exec -s read-only` via stdin. Produces a chaired resolution: the named disagreement, per-archetype verdict, one recommendation put to the user via `AskUserQuestion`, and a cost report (rounds, model tier, rough cost).
+**Inputs / outputs:** Takes a preflight (five-axis entry test, stop rule, evidence plan, reversal cost), then a neutral one-paragraph topic framing plus the relevant plan/code inline (Codex cannot read repo files itself). Uses `buildPrompt`/`buildTargetedPrompt`/`nextAction` from `$TEMPLATES/scripts/deliberate.mjs`, piping each round's prompt to `codex exec -s read-only` via stdin. Round 1 is full and blind; round 2 is a targeted dispute round on the live disputes only. Produces a chaired resolution: the named disagreement, per-archetype verdict, one approval-altitude question via `AskUserQuestion`, and a cost report (rounds, model tier, executor, real cost).
 
-**Failure modes:** Codex cannot spawn its own file reader on this machine (`CreateProcessAsUserW failed: 5`) and rejects large prompts passed as arguments (`Argument list too long`) — everything must go in via stdin. `isLooping` compares stance labels with strict equality, so raw model answers never match and loop detection silently never fires unless the chair first canonicalizes each round to a short label (e.g. `'build-reduced'`). If the topic isn't actually contested, the skill says so and declines to convene rather than manufacture disagreement.
+**Failure modes:** Codex cannot spawn its own file reader on this machine (`CreateProcessAsUserW failed: 5`) and rejects large prompts passed as arguments (`Argument list too long`) — everything must go in via stdin. `isLooping` compares stance labels with strict equality, so raw model answers never match and loop detection silently never fires unless the chair first canonicalizes each round to a short label (e.g. `'build-reduced'`). If the topic isn't actually contested, the skill says so and declines to convene rather than manufacture disagreement. Three failures are recorded from a measured 611k-token run: a re-filing round 2 costs more than round 1 and returns a fraction of the value; agreement in round 1 is corroboration, not convergence, and triggering resolution from it leaves completeness untested; and a panel judging a visual artifact from source code speculates — hence the mandatory rendered evidence before the final dispute.
 
 **daftkit disposition:** deferred to v1.1 (needs script vendoring)
 
@@ -73,9 +97,9 @@ repos that need them.
 
 ### handoff
 
-**Purpose:** Write a session handoff note — branch, plan step, next actions, files-to-read manifest — before a planned `/clear` or at the end of a phase.
+**Purpose:** Write a session handoff note — branch, plan step, next actions, files-to-read manifest — at the end of a phase.
 
-**Invocation:** "handoff", "wrap up", "I'm going to clear", or a phase is complete.
+**Invocation:** "handoff", "wrap up", or a phase is complete.
 
 **Inputs / outputs:** Appends one dated `###` entry to the governing plan document's `## Handoff log` (`docs/designs/YYYY-MM-DD-slug.md`), covering branch/merge state, what shipped, what the plan got wrong (marked **do not revert**), what was discovered, what's still open, and the next phase's read manifest. Also runs gstack `/context-save` and commits the note.
 
@@ -189,10 +213,12 @@ These five ship inside the `app-monolith` profile's files and land in a scaffold
 |---|---|---|---|
 | brief | user-level | Toggle terse, result-first output for the session | v1.0 portable |
 | code-map | user-level | Generate a line-anchored symbol index so large files are read in slices | deferred to v1.1 (needs script vendoring) |
+| continuum | user-level | Hand the chat off and write the validated prompt the next one starts from | held (until a real session runs a generated prompt end to end) |
+| crit | user-level | Design critique that refuses any appearance finding nobody rendered | held (needs a dependency manifest, startup validation, tested degraded mode) |
 | curious | user-level | Dial clarifying-question frequency moderately above default | v1.0 portable |
 | deliberate | user-level | Argue a contested plan/design through three Codex archetypes, chaired by the agent | deferred to v1.1 (needs script vendoring) |
 | gas-deploy | user-level | Deploy a Google Apps Script web app via clasp, avoiding ID and `/exec`-vs-`/dev` traps | v1.0 portable |
-| handoff | user-level | Write a durable session handoff note before `/clear` or at phase end | v1.0 portable |
+| handoff | user-level | Write a durable session handoff note at phase end | v1.0 portable |
 | insist | user-level | Hard-gate every user question so it's answered by the user, never auto-decided | v1.0 portable |
 | new-project | user-level | Scaffold a standards-compliant repo from base + one profile overlay | daftplate-only (the scaffolding engine) |
 | orient | user-level | Emit a short session-start brief on repo state | v1.0 portable |

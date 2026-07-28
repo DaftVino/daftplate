@@ -1,11 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyRemote, availableCheckContexts, ghJson, main, probeRemote, remoteSettings } from '../scripts/setup-repo.mjs';
+import { applyRemote, availableCheckContexts, ghJson, main, probeRemote, REMOTE_CALLS, remoteSettings } from '../scripts/setup-repo.mjs';
 import { makeRepo } from './helpers/make-repo.mjs';
 
 const fakeRun = (responses) => (args) => {
   const key = args.join(' ');
   return responses[key] ?? { status: 1, stdout: '', stderr: 'not found' };
+};
+
+// Records every call so we can assert which verb and path were used.
+const recordingRun = (responses) => {
+  const calls = [];
+  const run = (args, cwd, input) => {
+    calls.push({ key: args.join(' '), input });
+    return responses[args.join(' ')] ?? { status: 1, stdout: '', stderr: 'not found' };
+  };
+  return { run, calls };
 };
 
 test('ghJson parses stdout on success', () => {
@@ -201,6 +211,10 @@ test('main --remote returns 1 when the repo has no GitHub remote', () => {
 test('main --remote returns 0 when everything applies', () => {
   const run = remoteRun({
     'repo view': { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' },
+    // Checked before the narrower 'api repos/o/r' entry below, since that
+    // string is a prefix of this call's key too — order matters for
+    // remoteRun's substring match.
+    'repos/o/r/rulesets': { status: 0, stdout: '[]', stderr: '' },
     'api repos/o/r': { status: 0, stdout: JSON.stringify({ private: false, plan: { name: 'free' } }), stderr: '' },
   });
   assert.equal(main(['node', 'setup-repo.mjs', '.', '--remote'], run), 0);
@@ -227,4 +241,13 @@ test('main --remote returns 1 when an applicable gh call fails', () => {
     return { status: 0, stdout: '{}', stderr: '' };
   };
   assert.equal(main(['node', 'setup-repo.mjs', '.', '--remote'], run), 1);
+});
+
+// The guard that survives the copilot removal, and the reason it must: a setting
+// listed by remoteSettings() with no way to apply it takes down every other
+// setting in the same map call, which is how four settings once broke over one.
+test('every remote setting is dispatchable', () => {
+  for (const s of remoteSettings({ slug: 'o/r', private: false, plan: 'free', reachable: true })) {
+    assert.ok(s.id in REMOTE_CALLS, `${s.id} has no applier`);
+  }
 });

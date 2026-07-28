@@ -2,24 +2,79 @@
 
 Get the tools working, install the skills, and confirm both are correct — this covers `daftplate` itself, not a repo it scaffolds.
 
-## Prerequisites
+## The machine checklist
+
+`scripts/lib/toolchain.mjs` is the single source of truth for this list, and the only
+place an install string is written. The tables below are that manifest as prose,
+because this page is the only interface that exists in the case the list is for: a new
+machine, no checkout, nothing installed. `git` and `node` come first because
+everything after them — including the checker at the bottom of this section — needs
+both before it can run at all.
+
+Install commands are winget, which is what this workspace runs on. On another
+platform use your package manager, and treat each linked project as the authority on
+its own install instructions.
+
+### Required
+
+A machine of yours is misconfigured without these. `tier` means exactly that, and not
+"a script breaks" — `restic` is required because nothing else backs up what matters,
+which has nothing to do with this repo running. The narrower fact lives in the
+manifest's `blocksScripts`, which is what `setup-repo.mjs` filters on, and it is true
+of the first four only.
 
 | Tool | For | Install |
 |---|---|---|
-| `node` ≥ 20 | Runs every script in `scripts/`; `npm test` uses the built-in `node:test` runner | [nodejs.org](https://nodejs.org) or your platform's package manager |
-| `git` | Version control for this repo and everything it scaffolds | [git-scm.com](https://git-scm.com) |
-| `gh` (GitHub CLI) | Issues, PRs, releases — the workflow in `engineering-standards/repo-standards.md` assumes it | [cli.github.com](https://cli.github.com) |
-| `gitleaks` | Secret scanning — the pre-commit hook required by repo-standards §2.1 | `winget install Gitleaks.Gitleaks` (Windows) or [gitleaks.io](https://github.com/gitleaks/gitleaks#installing) |
-| `clasp` | Only needed for the `gas-webapp` profile — pushes and deploys Google Apps Script projects | `npm install -g @google/clasp`, then `clasp login` |
+| [Git](https://git-scm.com/) | version control — and cloning this repo, which everything below depends on | `winget install Git.Git` |
+| [Node.js](https://nodejs.org/) ≥ 20 | every script in `scripts/`; `npm test` uses the built-in `node:test` runner | `winget install OpenJS.NodeJS.LTS` |
+| [GitHub CLI](https://cli.github.com/) | issues, PRs, releases — the workflow in `engineering-standards/repo-standards.md` assumes it | `winget install GitHub.cli` |
+| [gitleaks](https://github.com/gitleaks/gitleaks) | pre-commit secret scanning, required by repo-standards §2.1 | `winget install Gitleaks.Gitleaks` |
+| [restic](https://github.com/restic/restic) | backups — nothing currently backs up what matters | `winget install restic.restic` |
+| [Codex CLI](https://github.com/openai/codex) | the disagreeing second opinion in `/review` and `/deliberate` | `npm install -g @openai/codex` |
 
-Check versions:
+### Recommended
+
+Absent, these cost you convenience rather than correctness. Nothing here changes an
+exit code.
+
+| Tool | For | Install |
+|---|---|---|
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | the search both agents and editors lean on | `winget install BurntSushi.ripgrep.MSVC` |
+| [fzf](https://github.com/junegunn/fzf) | fuzzy history and file picking in the shell | `winget install junegunn.fzf` |
+| [Bitwarden CLI](https://bitwarden.com/help/cli/) | secrets out of committed files — use `op` instead if a 1Password subscription already exists | `winget install Bitwarden.CLI` |
+
+### Per profile
+
+Only needed if you work on a repo of that type, and the checker stays quiet about them
+otherwise.
+
+| Profile | Tool | For | Install |
+|---|---|---|---|
+| `gas-webapp` | [clasp](https://github.com/google/clasp) | push and deploy Apps Script projects | `npm install -g @google/clasp`, then `clasp login` |
+| `web-app` | [Wrangler](https://github.com/cloudflare/workers-sdk) | deploy to Cloudflare Workers and Pages | `npm install -g wrangler` |
+
+### Check the machine
+
+Once `node` and a checkout exist, stop reading tables and let the second pass do it:
 
 ```
-node --version   # >=20
-git --version
-gh --version
-gitleaks version
+node scripts/check-machine.mjs
 ```
+
+It probes each entry on `PATH`, prints what is missing with the install command and
+the upstream credit, and exits non-zero **only** on a missing `required` tool — so it
+is safe in CI. It detects and never installs, and it keeps no state of its own: no
+snapshot, no ignore list, nothing to go stale.
+
+```
+node scripts/check-machine.mjs --profile gas-webapp   # add that profile's tools
+node scripts/check-machine.mjs --json                 # same verdict, machine-readable
+```
+
+Inside a scaffolded repo the profile is read from its `.daftplate.json`, so the bare
+run already knows. Installed a developer tool recently? Add it to
+`scripts/lib/toolchain.mjs` — the tables above are checked against it by `npm test`,
+so the two cannot drift apart silently.
 
 ## Install the skills
 
@@ -69,6 +124,43 @@ clean
 ```
 
 Any problem instead prints one `rule: path — message` line per violation to stderr, a count to stdout, and exits non-zero — run it again after fixing before trusting the install.
+
+## Agent surface
+
+Which agents are installed is part of setting up a machine, so the settled
+configuration is recorded here rather than left to be rediscovered.
+
+- **Claude Code** — implementation, planning, refactoring, documentation.
+- **Codex** — cross-model review and the disagreeing second opinion. Not a co-author.
+  On the manifest as `required` for that reason: a review pipeline with one model in
+  it is not a review pipeline.
+- **GitHub Copilot: not part of this setup.** It was, and the reasoning for dropping
+  it is worth keeping. Its allowance is metered rather than flat, so it is not the
+  free-at-the-margin surface it was argued to be; and the half that justified it —
+  automatic code review on pull requests — is delivered as a repository ruleset,
+  which GitHub refuses on a private repo on the free plan. What remained was
+  autocomplete at a price. Nothing here depends on it.
+- **MCP servers: none.** One earns a place only when a capability has no CLI, needs a
+  persistent connection, or needs schema discovery an agent cannot infer. Adding one
+  takes a one-paragraph ADR naming the use case, why a CLI is insufficient, what
+  credential it holds and where, whether it is global or project-scoped, and who
+  removes it if it goes unused for 30 days. Default to project-scoped. Cost is part of
+  the reason: MCP tool schemas consume context on **every** request.
+- **Deliberately not added:** Cursor, Cline, Roo Code, Continue, Kilo Code, fabric,
+  OpenClaw. A fifth prompt library with its own key and its own spend works against
+  the standing decision to keep the agent surface small enough to reason about.
+
+### Review routing
+
+Codex is the review pass — the reader whose job is to disagree, and the reason it
+is `required` rather than `recommended` on the checklist above. A full
+`/deliberate` panel is for genuinely irreversible decisions; one reviewer told to
+refute is the default, and it has measured better criticism per token.
+
+`node scripts/setup-repo.mjs <repo> --remote` still applies what GitHub will
+accept — delete-branch-on-merge everywhere, branch protection and secret scanning
+where the repo's visibility and plan allow — and reports the rest as unavailable
+with the reason and the unblock, rather than failing.
 
 ## The statusline (optional)
 

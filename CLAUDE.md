@@ -17,6 +17,7 @@
 test:     npm test
 verify:   node scripts/verify-templates.mjs .
 install:  node scripts/install-skills.mjs
+machine:  node scripts/check-machine.mjs
 ```
 
 Run `npm test` before every push.
@@ -40,6 +41,7 @@ Key routing rules:
 - Strategy/scope → invoke /plan-ceo-review
 - Architecture → invoke /plan-eng-review
 - Contested plan/design decision → invoke /deliberate (this repo's three-archetype Codex panel; heavier than a single outside voice)
+- Design critique — "is this generic?", identity/craft judgement → invoke /crit (refuses any appearance finding nobody rendered; delegates the critique doctrine to `impeccable`)
 - Design system/plan review → invoke /design-consultation or /plan-design-review
 - Full review pipeline → invoke /autoplan
 - Bugs/errors → invoke /investigate
@@ -48,6 +50,7 @@ Key routing rules:
 - Visual polish → invoke /design-review
 - Ship/deploy/PR → invoke /ship or /land-and-deploy
 - Publish/sync the public export repos (`daftplate`, `daftkit`) → invoke /publish
+- Handing off *and* starting a fresh chat ("I'm going to clear") → invoke /continuum (writes the next session's prompt and validates it; delegates the note to /handoff)
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec

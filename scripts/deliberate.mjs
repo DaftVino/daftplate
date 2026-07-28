@@ -94,6 +94,45 @@ export function buildPrompt(archetype, { topic, round, others }) {
   return lines.join('\n');
 }
 
+// Round 2 is a targeted dispute round, not a re-file. Measured 2026-07-24: a
+// round 2 that re-ran the whole prompt cost MORE than round 1 (253,888 tokens
+// against 250,724), made zero tool calls, and returned about three new insights
+// against round 1's eighteen. The chair extracts the live disputes and each seat
+// rules on those and nothing else.
+export function buildTargetedPrompt(archetype, { topic, round, disputes, others }) {
+  const lines = [
+    'You are one of three reviewers deliberating a decision. Do not be agreeable.',
+    'Do not summarize the others. Argue.',
+    '',
+    `YOUR ROLE: ${archetype.title} — ${archetype.stance}.`,
+    archetype.prompt,
+    '',
+    `This is round ${round}. Round 1 is closed. Do NOT re-file your position and`,
+    'do NOT re-rank your proposals. Rule on the contested points below and nothing',
+    'else. A response must either change one of your conclusions or cite new',
+    'evidence — restating a position you already hold is not a response, so say',
+    '"unchanged" and move on.',
+    '',
+    'THE CONTESTED POINTS:',
+    '',
+    ...disputes.map((d, i) => `${i + 1}. ${d}`),
+  ];
+
+  if (others?.length) {
+    lines.push('', 'Here is what the others argued on these points. Engage the strongest',
+      'opposing argument directly, by name:', '', ...others);
+  }
+
+  lines.push('', 'THE TOPIC, for reference:', '', topic, '',
+    'Be terse. One ruling per contested point, each with its reasoning and the',
+    'evidence that would change your mind.');
+
+  return lines.join('\n');
+}
+
+// Three remains available; two is the expected path — see the skill. Do not
+// trigger a further round from agreement: agreement proves a finding is salient,
+// never that the panel is complete.
 export const DEFAULT_MAX_ROUNDS = 3;
 
 const same = (a, b) => Object.keys(a).every((k) => a[k] === b[k]);

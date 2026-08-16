@@ -4,6 +4,7 @@
 import { existsSync, readdirSync, readFileSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { violation, reportViolations, runCli } from './lib/cli.mjs';
+import { walkFiles } from './lib/fs.mjs';
 
 export const REQUIRED_BASE_FILES = [
   'base.md',
@@ -22,6 +23,7 @@ export const REQUIRED_BASE_FILES = [
   'files/dot-github/ISSUE_TEMPLATE/feature-request.yml',
   'files/dot-github/PULL_REQUEST_TEMPLATE.md',
   'files/dot-github/workflows/ci.yml',
+  'files/dot-github/dependabot.yml',
   'files/docs/architecture.md',
   'files/docs/quick-ref-workflow.md',
 ];
@@ -140,13 +142,7 @@ export function checkBase(root) {
   return violations;
 }
 
-function overrideTargets(dir, prefix = '') {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir).flatMap((name) => {
-    const rel = prefix ? `${prefix}/${name}` : name;
-    return lstatSync(join(dir, name)).isDirectory() ? overrideTargets(join(dir, name), rel) : [rel];
-  });
-}
+const filesUnder = (dir) => walkFiles(dir).filter((e) => !e.isDir).map((e) => e.rel);
 
 export function checkProfiles(root) {
   const profiles = join(root, 'profiles');
@@ -187,7 +183,7 @@ export function checkProfiles(root) {
       }
 
       // A files-override entry must actually replace something the base layer writes.
-      for (const rel of overrideTargets(join(profiles, name, 'files-override'))) {
+      for (const rel of filesUnder(join(profiles, name, 'files-override'))) {
         if (!existsSync(join(root, 'base', 'files', rel))) {
           violations.push(violation(
             'override-unnecessary',
@@ -200,8 +196,153 @@ export function checkProfiles(root) {
     });
 }
 
+// --- Workflow supply-chain lint -------------------------------------------
+//
+// These patterns are regex over raw text rather than a YAML parse, because
+// CLAUDE.md constraint #4 forbids dependencies outright and hand-rolling a YAML
+// parser for a lint would be absurd. That is defensible for this input in
+// particular: `uses:` takes a scalar string, and "is this forty hex characters"
+// survives any representation this repo would actually write; the corpus is
+// closed and small — the workflow files this repo authors, every one reviewed in
+// a PR — not arbitrary user YAML; and `setup-repo.mjs:122` already derives
+// required check contexts by regex over these same files, in a path that can
+// permanently break branch protection when it is wrong. A lint is a strictly
+// safer home for the technique than the code that already ships it.
+//
+// Two known blind spots, both of which fail open on one line while every other
+// rule still holds: a quoted scalar (`uses: "actions/checkout@v4"`) is not
+// matched, and neither is a `uses:` carried inside a block scalar as data.
+// Nothing in this corpus writes either. A false positive — the dangerous
+// direction for a gate — needs a literal `uses:` key at the start of a line, so
+// it cannot arise from prose.
+
+const WORKFLOW_FILE = /\.ya?ml$/;
+const USES_LINE = /^\s*(?:-\s+)?uses:\s*(\S+)[^\S\n]*(#.*)?$/;
+const PINNED_ACTION = /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/;
+const PINNED_DOCKER = /^docker:\/\/\S+@sha256:[0-9a-f]{64}$/;
+const LOCAL_ACTION = /^\.{1,2}\//;
+const VERSION_COMMENT = /^#\s*v\d/;
+
+const DOWNLOADER = /\b(?:curl|wget)\b/;
+const PIPED_DOWNLOAD = /\b(?:curl|wget)\b.*\|\s*(?:tar|sh|bash|zsh|python3?)\b/;
+
+// The trust anchor is the committed literal, not the vocabulary. Requiring only
+// that `sha256sum -c` appear would pass a workflow that fetches the checksums
+// file from the same release, over the same channel, at the same moment as the
+// artifact — which verifies nothing, since whoever can alter the tarball can
+// alter the checksums beside it. So a download has to name an `env:` key whose
+// value is a full 64-hex digest sitting in the reviewed file.
+const ENV_DIGEST = /^\s*([A-Za-z_][A-Za-z0-9_]*):\s*['"]?([0-9a-f]{64})['"]?\s*$/;
+
+/** Every workflow file this repo authors: the base template, both profile layers, and its own live CI. */
+export function workflowFiles(root) {
+  const dirs = ['.github/workflows', 'base/files/dot-github/workflows'];
+  const profiles = join(root, 'profiles');
+  if (existsSync(profiles)) {
+    for (const name of readdirSync(profiles)) {
+      if (!lstatSync(join(profiles, name)).isDirectory()) continue;
+      // files-override/ carries no workflow today. It is scanned anyway: an
+      // override is the one mechanism designed to replace a base file, and so
+      // the one place a hardened base rule would get quietly reverted.
+      dirs.push(`profiles/${name}/files/dot-github/workflows`);
+      dirs.push(`profiles/${name}/files-override/dot-github/workflows`);
+    }
+  }
+  return dirs.flatMap((dir) => walkFiles(join(root, dir))
+    .filter((entry) => !entry.isDir && WORKFLOW_FILE.test(entry.rel))
+    .map((entry) => `${dir}/${entry.rel}`));
+}
+
+/** `env:` keys whose value is a full 64-hex digest — the only values that can anchor a download. */
+function envDigestKeys(text) {
+  const lines = text.split(/\r?\n/);
+  const keys = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^(\s*)env:\s*$/);
+    if (!open) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === '') continue;
+      if (lines[j].match(/^\s*/)[0].length <= open[1].length) break;
+      const entry = lines[j].match(ENV_DIGEST);
+      if (entry) keys.add(entry[1]);
+    }
+  }
+  return [...keys];
+}
+
+/** Each `run:` script: the key's own line plus every following line indented past it. */
+function runBlocks(text) {
+  const lines = text.split(/\r?\n/);
+  const blocks = [];
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^(\s*(?:-\s+)?)run:(.*)$/);
+    if (!open) continue;
+    const column = open[1].length;
+    const body = [open[2].replace(/^\s*[|>][-+\d]*\s*/, '').trim()];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      if (lines[j].trim() === '') { body.push(''); continue; }
+      if (lines[j].match(/^\s*/)[0].length <= column) break;
+      body.push(lines[j].trim());
+    }
+    blocks.push({ line: i + 1, text: body.join('\n') });
+    i = j - 1;
+  }
+  return blocks;
+}
+
+export function checkWorkflows(root) {
+  return workflowFiles(root).flatMap((rel) => {
+    const text = readFileSync(join(root, rel), 'utf8');
+    const violations = [];
+
+    for (const line of text.split(/\r?\n/)) {
+      const used = line.match(USES_LINE);
+      if (!used) continue;
+      const [, ref, comment] = used;
+      if (LOCAL_ACTION.test(ref)) continue;
+      if (!PINNED_ACTION.test(ref) && !PINNED_DOCKER.test(ref)) {
+        violations.push(violation(
+          'workflow-unpinned-action',
+          rel,
+          `uses: ${ref} — pin to a full 40-character commit SHA (or docker://…@sha256:<64 hex>); a tag or branch is mutable and can be repointed after review`,
+        ));
+        continue;
+      }
+      if (!VERSION_COMMENT.test(comment ?? '')) {
+        violations.push(violation(
+          'workflow-missing-version-comment',
+          rel,
+          `uses: ${ref} has no trailing "# vX.Y.Z" — the SHA alone tells a reader nothing about what is pinned, and Dependabot rewrites that comment when it bumps the pin`,
+        ));
+      }
+    }
+
+    const digests = envDigestKeys(text);
+    for (const block of runBlocks(text)) {
+      for (const [offset, line] of block.text.split('\n').entries()) {
+        if (!PIPED_DOWNLOAD.test(line)) continue;
+        violations.push(violation(
+          'workflow-piped-download',
+          rel,
+          `line ${block.line + offset}: a download piped straight into an extractor or a shell executes bytes that were never a file, so nothing can verify them first`,
+        ));
+      }
+      if (!DOWNLOADER.test(block.text)) continue;
+      if (digests.some((key) => new RegExp(`\\$\\{?${key}\\b`).test(block.text))) continue;
+      violations.push(violation(
+        'workflow-unverified-download',
+        rel,
+        `line ${block.line}: this run: block downloads something without checking it against a committed 64-hex digest held in a workflow env: key`,
+      ));
+    }
+
+    return violations;
+  });
+}
+
 export function verifyTemplates(root) {
-  return [...checkBase(root), ...checkProfiles(root)];
+  return [...checkBase(root), ...checkProfiles(root), ...checkWorkflows(root)];
 }
 
 function main(argv) {

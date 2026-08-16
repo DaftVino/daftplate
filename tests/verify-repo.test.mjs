@@ -68,14 +68,32 @@ test('checkDocsNaming is a no-op when there is no docs directory', () => {
   assert.deepEqual(checkDocsNaming(makeRepo(rest)), []);
 });
 
-test('checkDocsSubdirs allows designs and adr by default, rejects others', () => {
-  const dir = makeRepo({ ...MINIMAL, 'docs/designs/2026-07-21-x.md': '# x\n', 'docs/bugs/x.md': '# x\n' });
+test('checkDocsSubdirs allows designs, adr and records by default, rejects others', () => {
+  const dir = makeRepo({
+    ...MINIMAL,
+    'docs/designs/2026-07-21-x.md': '# x\n',
+    'docs/records/deliberate/2026-07-25-x.md': '# x\n',
+    'docs/bugs/x.md': '# x\n',
+  });
   assert.deepEqual(checkDocsSubdirs(dir).map((v) => v.path), ['docs/bugs']);
 });
 
 test('checkDocsSubdirs honours profile-declared extra subdirs', () => {
   const dir = makeRepo({ ...MINIMAL, 'docs/architecture/context.md': '# x\n' });
   assert.deepEqual(checkDocsSubdirs(dir, ['designs', 'adr', 'architecture']), []);
+});
+
+// The load-bearing half of the universal buckets: a profile's docs-subdirs ADDS
+// to designs/adr/records rather than replacing them. Every profile.md restates
+// "designs, adr" and none restates "records", so a replacing implementation
+// would flag /deliberate's own output as a layout violation in all eight.
+test('checkDocsSubdirs treats profile subdirs as additions, not a replacement', () => {
+  const dir = makeRepo({
+    ...MINIMAL,
+    'docs/records/deliberate/2026-07-25-x.md': '# x\n',
+    'docs/database/schema.md': '# x\n',
+  });
+  assert.deepEqual(checkDocsSubdirs(dir, ['designs', 'adr', 'database']), []);
 });
 
 test('checkDocsSubdirs is a no-op when there is no docs directory', () => {

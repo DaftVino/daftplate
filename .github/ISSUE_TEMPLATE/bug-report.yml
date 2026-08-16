@@ -1,4 +1,3 @@
-# Place at .github/ISSUE_TEMPLATE/bug-report.yml
 name: Bug report
 description: Something is broken or behaving unexpectedly
 title: "[bug] "
@@ -9,6 +8,18 @@ body:
     attributes:
       label: Summary
       description: One or two sentences. What's broken?
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: The filer's read, not the verdict — the maintainer re-triages on the board. State it anyway so triage starts from a position.
+      options:
+        - Urgent — blocks the release
+        - High — lands on the current branch
+        - Medium — follow-up
+        - Low — parked
     validations:
       required: true
   - type: textarea
@@ -39,6 +50,16 @@ body:
     attributes:
       label: Environment
       placeholder: "app version, browser/OS, account type (consumer/Workspace)"
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What closes this (optional)
+      description: "Name a rung on the evidence ladder — specified / unit-tested / persisted / wired / real-provider-proven / journey-accepted / beta-ready (repo-standards §6.6) — and the artifact that proves it. Closing at journey-accepted or above requires that artifact attached as a comment."
+      placeholder: |
+        Rung: journey-accepted
+        Artifact: transcript of the import running end to end against the real account
     validations:
       required: false
   - type: textarea

@@ -44,9 +44,19 @@ export function checkDocsNaming(dir) {
     .map(({ rel }) => violation('naming', rel, 'everything under docs/ must be lowercase-kebab'));
 }
 
-export function checkDocsSubdirs(dir, allowed = ['designs', 'adr']) {
+// Allowed in every repo whatever its profile. `records/` joins designs/ and adr/
+// because skills that emit durable records — /deliberate writes
+// docs/records/deliberate/YYYY-MM-DD-slug.md — need a home that does not depend
+// on which profile produced the repo. A profile's `docs-subdirs` EXTENDS this
+// set rather than replacing it: every profile already restates "designs, adr",
+// and a profile that forgot to restate a universal bucket would otherwise have
+// its own skill output flagged as a layout violation.
+export const UNIVERSAL_DOCS_SUBDIRS = ['designs', 'adr', 'records'];
+
+export function checkDocsSubdirs(dir, extra = []) {
   const docs = join(dir, 'docs');
   if (!existsSync(docs)) return [];
+  const allowed = [...new Set([...UNIVERSAL_DOCS_SUBDIRS, ...extra])];
   return readdirSync(docs)
     .filter((name) => lstatSync(join(docs, name)).isDirectory() && !allowed.includes(name))
     .map((name) => violation('docs-layout', `docs/${name}`, `docs/ is flat except ${allowed.join(', ')}`));

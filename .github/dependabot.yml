@@ -1,0 +1,31 @@
+version: 2
+
+# Every `uses:` in this repo's workflows is pinned to a full commit SHA, which is
+# the only immutable reference GitHub offers. A pin does not rot — that is the
+# point of pinning — but it does go unmaintained: a SHA that predates a fixed
+# actions/checkout bug carries that bug indefinitely, and nothing signals it.
+#
+# The github-actions ecosystem is the one that understands SHA pins specifically:
+# it rewrites the hash AND the trailing `# vX.Y.Z` comment together, which is why
+# that comment is mandatory rather than decorative.
+#
+# Deliberately no auto-merge. The pin exists so a human reads what changed; an
+# automerged bump defeats the whole mechanism.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One PR a week for routine bumps rather than one per action. Actions release
+    # rarely enough that this is roughly one PR a month in practice.
+    #
+    # Majors are deliberately left OUT of the group, so they arrive as their own
+    # PR. A grouped major is a breaking change riding in on a PR titled like
+    # routine maintenance, reviewed at the attention a routine bump gets — which
+    # is the failure this whole pinning exercise exists to prevent.
+    groups:
+      actions:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    commit-message:
+      prefix: 'chore(ci)'

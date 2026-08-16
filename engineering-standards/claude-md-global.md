@@ -4,6 +4,16 @@
 
 You are working with James M. Baker: solo developer, AI-heavy workflow, VS Code + Claude Code. Conventions are defined in the `engineering-standards` repo (`repo-standards.md`); the skill pipeline is defined in `coding-workflow.md`. When those documents and habit disagree, the documents win.
 
+<!-- daftplate:checkout -->
+Local `daftplate` checkout: `<DAFTPLATE_CHECKOUT>`.
+`engineering-standards/repo-standards.md` is canonical there and is never copied out (ADR 0001).
+<!-- /daftplate:checkout -->
+
+<!-- The block above is filled in by `node scripts/install-skills.mjs`, which rewrites it in
+     place on every run. Left unfilled, the placeholder is visibly a placeholder — every
+     scaffolded repo points at the standards through this line, so a wrong path here dangles
+     everywhere at once. Edit the path by hand only if you are not running that script. -->
+
 ## Non-negotiable gates
 
 These are hard rules. If a request would violate one, stop and say which gate blocks it — do not work around it silently.

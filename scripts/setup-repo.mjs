@@ -119,6 +119,15 @@ export function remoteSettings(probe) {
 // ships: a repo with no matching workflow (e.g. the skills-only daftkit export)
 // would otherwise have its `main` require a check that never reports, blocking
 // every PR forever — with enforce_admins on, unrecoverably.
+//
+// `candidates` is the other half of that guard, and the load-bearing half. This
+// FILTERS a hardcoded allowlist rather than discovering job ids, and the sole
+// call site passes no override, so a new job added to any workflow — a linter, a
+// staleness check, a CodeQL scan — can never become a required check by being
+// written. Widening this list removes a protection whoever widens it will not
+// know exists: a job that is required but does not report on every repo tier
+// deadlocks `main` in exactly the way the paragraph above describes. Add an id
+// here only alongside proof that the job reports on a private free-plan repo.
 export function availableCheckContexts(repoDir, candidates = ['test', 'secrets']) {
   const dir = join(repoDir, '.github', 'workflows');
   if (!existsSync(dir)) return [];

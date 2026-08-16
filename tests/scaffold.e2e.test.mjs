@@ -55,3 +55,28 @@ test('a scaffolded repo carries a runnable orient hook', () => {
 test('scaffold rejects an unknown profile type', () => {
   assert.throws(() => scaffold(ROOT, 'no-such-type', emptyDir(), values('x')), /unknown profile type/);
 });
+
+// H1b. Nothing else proves the Dependabot config reaches a scaffolded repo. The
+// verifier-clean assertion above does not: `REQUIRED_BASE_FILES` is checked
+// against the TEMPLATE tree, not against the scaffold, so dropping the file in
+// `apply-layer.mjs`'s collect() — `if (name === 'dependabot.yml') return []` —
+// leaves every other H1b test green while no repo ever receives it.
+//
+// The `dot-` rename is the other half: the file is stored `dot-github/` so it
+// stays inert here, and a rename that fired only at the top level would ship
+// `.github/dot-dependabot.yml`, which GitHub ignores silently.
+for (const type of PROFILES) {
+  test(`scaffolding ${type} delivers .github/dependabot.yml with the dot- prefix stripped`, () => {
+    const dest = emptyDir();
+    scaffold(ROOT, type, dest, values(`dep-${type}`));
+
+    const target = join(dest, '.github', 'dependabot.yml');
+    assert.ok(existsSync(target), `${type}: no .github/dependabot.yml`);
+    assert.equal(
+      existsSync(join(dest, '.github', 'dot-dependabot.yml')),
+      false,
+      `${type}: the dot- prefix survived the copy`,
+    );
+    assert.match(readFileSync(target, 'utf8'), /package-ecosystem:\s*github-actions/);
+  });
+}

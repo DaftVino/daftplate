@@ -99,6 +99,44 @@ Output names each installed skill:
 installed 9 skill(s) to C:\Users\you\.claude\skills: brief, code-map, gas-deploy, handoff, new-project, orient, ...
 ```
 
+### Record where this checkout lives
+
+The same command writes the path of *this* checkout into `~/.claude/CLAUDE.md`. That is
+not cosmetic: every repo daftplate scaffolds gets a CLAUDE.md pointing at
+`engineering-standards/repo-standards.md` here rather than a copy of it (ADR 0001), and
+on a machine that never recorded the path, the pointer resolves to nothing. Copying the
+standards into the repo instead is the failure this prevents, and it has already
+happened five times.
+
+The block it writes, and rewrites in place on every later run:
+
+```
+<!-- daftplate:checkout -->
+Local `daftplate` checkout: `X:\Projects\daftplate`.
+`engineering-standards/repo-standards.md` is canonical there and is never copied out (ADR 0001).
+<!-- /daftplate:checkout -->
+```
+
+Three things worth knowing before you read the output:
+
+- **The path recorded is the checkout containing the script**, not the directory you ran
+  it from, so `node X:/Projects/daftplate/scripts/install-skills.mjs` from anywhere
+  records `X:/Projects/daftplate`.
+- **On the public daftplate export it prints `skills not installed: … has no skills/
+  directory` and records the path anyway.** That export deliberately withholds `skills/`
+  (they ship in daftkit, ADR 0002), so the complaint is expected and the run is not a
+  failure — the line after it is the one that matters.
+- **It never edits prose it did not write.** If `~/.claude/CLAUDE.md` does not exist it
+  is created from `engineering-standards/claude-md-global.md`, gates included; if it
+  exists without those gates you get told to merge them by hand, and nothing is
+  injected. A marker block it cannot bound — duplicated, unclosed or reordered — is
+  refused and left alone, with the reason printed.
+
+`node scripts/check-machine.mjs` reports the record afterwards: whether a path is
+recorded, whether it resolves to a real daftplate checkout, and how far behind its
+upstream it is. A vendored copy of the standards inside some other repo does not count
+as a checkout there, which is the whole point of checking.
+
 A skill directory without a `SKILL.md` is skipped and reported on stderr — that's a malformed skill, not a failure of the installer.
 
 Editing the installed copy under `~/.claude/skills/` instead of the source in this repo's `skills/` is a bug: your change is silently overwritten on the next install.

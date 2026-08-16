@@ -11,6 +11,10 @@
 - Decisions: `docs/adr/` — read before proposing architectural changes
 - Active plans: `docs/designs/`
 
+## Issue tracking
+
+Issues are **created in GitHub** (`gh issue create`, templates) and **managed in Linear** — a deliberate deviation from `repo-standards.md` §6.5 (ADR 0006). Workspace `DaftForge`, team `FORGE`, project [daftplate](https://linear.app/daftforge/project/daftplate-36e233e735dc), kept in step by Linear's GitHub Issues Sync — never create an issue directly in Linear. Dress in Linear within 24h of filing: priority (Urgent=P1 blocks release · High=P2 lands this branch · Medium=P3 follow-up · Low=parked), milestone, blocking relations. Status Done requires evidence attached as a comment. PRs close with `Fixes #N` (GitHub number) — GitHub and Linear sequences drift, never compute one from the other.
+
 ## Commands
 
 ```

@@ -1,6 +1,6 @@
 # Design: <title>
 
-<!-- File: docs/designs/YYYY-MM-DD-slug.md — written BEFORE the work. Never updated after implementation except the Outcome line. -->
+<!-- File: docs/designs/YYYY-MM-DD-slug.md — written BEFORE the work. Never updated after implementation except the Outcome line. Budget: ≤ ~15KB; past that, split (repo-standards §6.2). -->
 
 **Date:** YYYY-MM-DD
 **Issue(s):** #N

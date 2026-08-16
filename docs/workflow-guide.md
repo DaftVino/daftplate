@@ -30,6 +30,24 @@ Work happens on a short-lived branch off `main` (`type/short-slug`, matching the
 
 Every change to `main` goes through a PR, even solo work, squash-merged so `main` stays one commit per change. CI must be green before merge. The harness does not merge PRs — a human does; that's a deliberate stop in the pipeline, not a missing feature. Which review and deploy skills run before that PR lands depends on the repo's profile — see the pipeline table below.
 
+### Cutting a release — `/ship` does not tag
+
+A release is four artifacts (repo-standards §5): a changelog entry, a bumped version constant, an **annotated git tag** `vX.Y.Z`, and a **GitHub Release** made from that tag. `/ship` produces the first two and stops.
+
+This is worth stating plainly because `/ship` reads as though it handles the rest. Its step 15 says *"only the final commit (VERSION + CHANGELOG) gets the version tag"* — where "version tag" means the version string inside the commit message. It never runs `git tag` or `gh release create`. Following it to the letter leaves a changelog entry with no tag behind it, which §5 calls a violation, and it happened twice here before anything noticed.
+
+So after `/ship`, by hand:
+
+```
+git tag -a vX.Y.Z <release-commit> -m "vX.Y.Z — <the changelog headline>"
+git push origin vX.Y.Z
+gh release create vX.Y.Z --title "vX.Y.Z — <headline>" --notes-from-tag
+```
+
+`gh release create` rejects `--notes-from-tag` together with `--repo`; run it from inside the repo instead.
+
+In a repo with a public export, `scripts/publish.mjs` refuses a real publish whose changelog names a version with no matching tag, so a forgotten tag stops the release rather than shipping a claim nobody can trace. A `--dry-run` reports the same gap as a warning and still runs — it copies nothing, so there is nothing to protect.
+
 ## Per-profile pipelines
 
 Each profile's `skill-routing.md` defines a `## Pipeline` — the skill chain a change in that profile runs through before it ships — and a `## Off` list of skills that don't apply and why. All eight share the same spine (`brainstorming` → `writing-plans` → `/plan-eng-review` → `test-driven-development` → `/review` → `/ship`); the differences are what gets added or removed around it.

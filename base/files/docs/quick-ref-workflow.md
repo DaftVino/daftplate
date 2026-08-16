@@ -14,6 +14,8 @@
 
 "Non-trivial" = multi-PR, touches persisted data, risky enough to review before coding, or an agent executes it unsupervised. Otherwise skip the design doc.
 
+Board variant: repos on the Linear board (repo-standards §6.5.1) still create every issue in GitHub; management happens in Linear.
+
 ## GitHub Flow (every change)
 
 ```

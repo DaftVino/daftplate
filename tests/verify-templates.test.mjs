@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { makeRepo } from './helpers/make-repo.mjs';
+import { walkFiles } from '../scripts/lib/fs.mjs';
 import {
   REQUIRED_BASE_FILES, REQUIRED_PROFILE_FILES,
-  parseProfileMeta, metaValueIssues, checkBase, checkProfiles, verifyTemplates,
+  parseProfileMeta, metaValueIssues, checkBase, checkProfiles, checkWorkflows,
+  workflowFiles, verifyTemplates,
 } from '../scripts/verify-templates.mjs';
 
 const PROFILE_MD = [
@@ -244,4 +247,452 @@ test('checkProfiles surfaces a bad test: value through the real call path', () =
   const rules = checkProfiles(root).map((v) => v.rule);
 
   assert.ok(rules.includes('profile-metadata-test-form'), `got: ${rules.join(', ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// checkWorkflows (H1a / spec 04 D4) — supply-chain lint over workflow YAML.
+// ---------------------------------------------------------------------------
+
+const SHA = 'a'.repeat(40);
+const DIGEST = 'b'.repeat(64);
+const BASE_CI = 'base/files/dot-github/workflows/ci.yml';
+
+/** One workflow file, pinned-clean unless a test varies a part of it. */
+const workflow = ({ uses = `actions/checkout@${SHA}   # v4.4.0`, env = [], run = [] } = {}) => [
+  'name: ci',
+  '',
+  'jobs:',
+  '  job:',
+  '    runs-on: ubuntu-latest',
+  ...(env.length ? ['    env:', ...env.map((line) => `      ${line}`)] : []),
+  '    steps:',
+  `      - uses: ${uses}`,
+  ...(run.length ? ['      - name: Step', '        run: |', ...run.map((line) => `          ${line}`)] : []),
+  '',
+].join('\n');
+
+const rulesFor = (files) => checkWorkflows(makeRepo(files)).map((v) => v.rule);
+
+test('checkWorkflows passes on a workflow pinned to a 40-hex SHA with a version comment', () => {
+  assert.deepEqual(checkWorkflows(makeRepo({ [BASE_CI]: workflow() })), []);
+});
+
+test('checkWorkflows rejects a floating major tag and names the file', () => {
+  const violations = checkWorkflows(makeRepo({ [BASE_CI]: workflow({ uses: 'actions/checkout@v4' }) }));
+
+  assert.deepEqual(violations.map((v) => v.rule), ['workflow-unpinned-action']);
+  assert.equal(violations[0].path, BASE_CI);
+  assert.match(violations[0].message, /actions\/checkout@v4/);
+});
+
+test('checkWorkflows rejects a branch reference', () => {
+  assert.deepEqual(rulesFor({ [BASE_CI]: workflow({ uses: 'actions/checkout@main' }) }), ['workflow-unpinned-action']);
+});
+
+// `git rev-parse --short` is the reflexive thing to paste, and an abbreviated
+// SHA is not a pin: it can become ambiguous as the repo grows.
+test('checkWorkflows rejects an abbreviated SHA', () => {
+  assert.deepEqual(rulesFor({ [BASE_CI]: workflow({ uses: 'actions/checkout@a1b2c3d   # v4.4.0' }) }), ['workflow-unpinned-action']);
+});
+
+test('checkWorkflows accepts a local ./ action reference', () => {
+  assert.deepEqual(checkWorkflows(makeRepo({ [BASE_CI]: workflow({ uses: './.github/actions/thing' }) })), []);
+});
+
+test('checkWorkflows rejects a SHA-pinned uses: with no version comment', () => {
+  const violations = checkWorkflows(makeRepo({ [BASE_CI]: workflow({ uses: `actions/checkout@${SHA}` }) }));
+
+  assert.deepEqual(violations.map((v) => v.rule), ['workflow-missing-version-comment']);
+});
+
+test('checkWorkflows accepts a docker reference pinned to a full sha256 digest', () => {
+  const uses = `docker://ghcr.io/org/tool@sha256:${DIGEST}   # v1.0.0`;
+  assert.deepEqual(checkWorkflows(makeRepo({ [BASE_CI]: workflow({ uses }) })), []);
+});
+
+// The docker exemption is only worth having if the digest has to be a digest.
+test('checkWorkflows rejects a docker reference whose sha256 digest is truncated', () => {
+  const uses = 'docker://ghcr.io/org/tool@sha256:abc123   # v1.0.0';
+  assert.deepEqual(rulesFor({ [BASE_CI]: workflow({ uses }) }), ['workflow-unpinned-action']);
+});
+
+test('checkWorkflows rejects curl piped into an extractor', () => {
+  const rules = rulesFor({
+    [BASE_CI]: workflow({
+      env: [`TOOL_SHA256: ${DIGEST}`],
+      run: ['echo "${TOOL_SHA256}"', 'curl -sSL "$url" | tar -xz tool'],
+    }),
+  });
+
+  assert.deepEqual(rules, ['workflow-piped-download']);
+});
+
+test('checkWorkflows rejects curl piped into a shell', () => {
+  const rules = rulesFor({
+    [BASE_CI]: workflow({
+      env: [`TOOL_SHA256: ${DIGEST}`],
+      run: ['echo "${TOOL_SHA256}"', 'curl -sSL "$url" | bash'],
+    }),
+  });
+
+  assert.deepEqual(rules, ['workflow-piped-download']);
+});
+
+test('checkWorkflows rejects a download with no committed digest to verify it against', () => {
+  const rules = rulesFor({
+    [BASE_CI]: workflow({ run: ['curl -sSLf -o tool.tgz "$url"', 'tar -xzf tool.tgz'] }),
+  });
+
+  assert.deepEqual(rules, ['workflow-unverified-download']);
+});
+
+// The rule enforces D3's trust anchor, not its vocabulary. Fetching the
+// checksums file from the same release over the same channel verifies nothing —
+// whoever can alter the tarball can alter the checksums beside it — so a block
+// that says `sha256sum -c` without a committed literal is still a violation.
+test('checkWorkflows rejects a checksum fetched alongside the artifact it checks', () => {
+  const rules = rulesFor({
+    [BASE_CI]: workflow({
+      run: [
+        'curl -sSLf -o tool.tgz "$url"',
+        'curl -sSLf -o checksums.txt "$checksums_url"',
+        'sha256sum -c checksums.txt',
+      ],
+    }),
+  });
+
+  assert.deepEqual(rules, ['workflow-unverified-download']);
+});
+
+test('checkWorkflows accepts a download verified against a committed 64-hex env digest', () => {
+  const violations = checkWorkflows(makeRepo({
+    [BASE_CI]: workflow({
+      env: [`TOOL_SHA256: ${DIGEST}`],
+      run: [
+        'curl -sSLf -o tool.tgz "$url"',
+        'echo "${TOOL_SHA256}  tool.tgz" | sha256sum -c -',
+        'tar -xzf tool.tgz tool',
+      ],
+    }),
+  }));
+
+  assert.deepEqual(violations, []);
+});
+
+// A truncated or malformed literal is not an anchor, so it must not satisfy the
+// rule just by being named `..._SHA256`.
+test('checkWorkflows does not accept a malformed env digest as a trust anchor', () => {
+  const rules = rulesFor({
+    [BASE_CI]: workflow({
+      env: ['TOOL_SHA256: b1b2b3b4'],
+      run: ['curl -sSLf -o tool.tgz "$url"', 'echo "${TOOL_SHA256}  tool.tgz" | sha256sum -c -'],
+    }),
+  });
+
+  assert.deepEqual(rules, ['workflow-unverified-download']);
+});
+
+test('checkWorkflows returns [] when the root has no workflow directory at all', () => {
+  assert.deepEqual(checkWorkflows(makeRepo({ 'README.md': '# x\n' })), []);
+});
+
+test('checkWorkflows scans workflows a profile adds', () => {
+  const rel = 'profiles/design-vault/files/dot-github/workflows/vault.yml';
+  const violations = checkWorkflows(makeRepo({ [rel]: workflow({ uses: 'actions/checkout@v4' }) }));
+
+  assert.deepEqual(violations.map((v) => v.path), [rel]);
+});
+
+// files-override/ is the one mechanism designed to replace a base file, so it is
+// exactly where hardening would get quietly reverted. No profile overrides a
+// workflow today; the glob covers it anyway.
+test('checkWorkflows scans workflows a profile overrides', () => {
+  const rel = 'profiles/web-app/files-override/dot-github/workflows/ci.yml';
+  const violations = checkWorkflows(makeRepo({ [rel]: workflow({ uses: 'actions/checkout@v4' }) }));
+
+  assert.deepEqual(violations.map((v) => v.path), [rel]);
+});
+
+test("checkWorkflows scans this repo's own live workflows, not only templates", () => {
+  const rel = '.github/workflows/ci.yml';
+  const violations = checkWorkflows(makeRepo({ [rel]: workflow({ uses: 'actions/checkout@v4' }) }));
+
+  assert.deepEqual(violations.map((v) => v.path), [rel]);
+});
+
+test('verifyTemplates reports workflow violations', () => {
+  const root = makeRepo({ ...base(), ...profile('web-app'), [BASE_CI]: workflow({ uses: 'actions/checkout@v4' }) });
+
+  assert.ok(verifyTemplates(root).some((v) => v.rule === 'workflow-unpinned-action'));
+});
+
+// ---------------------------------------------------------------------------
+// The repo as shipped. These run against the real files, so a reversion in any
+// workflow — template, profile or live — turns them red without anyone
+// remembering to extend a hardcoded list.
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const realWorkflows = () => workflowFiles(REPO_ROOT);
+const readWorkflow = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8');
+
+test('workflowFiles finds every workflow this repo ships', () => {
+  assert.deepEqual(realWorkflows().sort(), [
+    '.github/workflows/ci.yml',
+    'base/files/dot-github/workflows/ci.yml',
+    'profiles/content-library/files/dot-github/workflows/library.yml',
+    'profiles/design-vault/files/dot-github/workflows/vault.yml',
+  ]);
+});
+
+test('the repo as shipped has no template violations', () => {
+  assert.deepEqual(verifyTemplates(REPO_ROOT), []);
+});
+
+// The digest has to be checked before tar touches the bytes; both strings merely
+// being present is what the old pipe-to-tar form would also satisfy.
+test('the secrets job verifies the gitleaks digest before extracting it', () => {
+  for (const rel of realWorkflows().filter((f) => f.endsWith('ci.yml'))) {
+    const text = readWorkflow(rel);
+    const verify = text.indexOf('sha256sum -c');
+    const extract = text.indexOf('tar -x');
+
+    assert.notEqual(verify, -1, `${rel}: no checksum verification`);
+    assert.notEqual(extract, -1, `${rel}: no extraction`);
+    assert.ok(verify < extract, `${rel}: extracts at ${extract} before verifying at ${verify}`);
+  }
+});
+
+// checkout persists GITHUB_TOKEN into .git/config by default, which puts the
+// repo credential in reach of anything the job then runs — the gitleaks binary
+// included. Every job here is read-only, so neither is needed.
+test('every checkout in every workflow refuses to persist credentials', () => {
+  for (const rel of realWorkflows()) {
+    const text = readWorkflow(rel);
+    const checkouts = text.match(/actions\/checkout@/g) ?? [];
+    const refusals = text.match(/persist-credentials:\s*false/g) ?? [];
+
+    assert.ok(checkouts.length > 0, `${rel}: expected at least one checkout`);
+    assert.equal(refusals.length, checkouts.length, `${rel}: ${checkouts.length} checkout(s), ${refusals.length} refusal(s)`);
+  }
+});
+
+test('every job in every workflow declares read-only permissions', () => {
+  for (const rel of realWorkflows()) {
+    const text = readWorkflow(rel);
+    const jobs = text.match(/^\s+runs-on:/gm) ?? [];
+    const grants = text.match(/^\s+permissions:\n\s+contents: read$/gm) ?? [];
+
+    assert.equal(grants.length, jobs.length, `${rel}: ${jobs.length} job(s), ${grants.length} read-only grant(s)`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H1b — Dependabot in the base layer (D2) and the template/live drift guard (D5).
+// ---------------------------------------------------------------------------
+
+const normalize = (text) => text.replace(/\r\n/g, '\n');
+
+test('REQUIRED_BASE_FILES includes the Dependabot config', () => {
+  assert.equal(REQUIRED_BASE_FILES.includes('files/dot-github/dependabot.yml'), true);
+});
+
+test('checkBase reports the Dependabot config when the base layer drops it', () => {
+  const files = base();
+  delete files['base/files/dot-github/dependabot.yml'];
+  const violations = checkBase(makeRepo(files));
+
+  assert.deepEqual(violations.map((v) => v.path), ['base/files/dot-github/dependabot.yml']);
+  assert.equal(violations[0].rule, 'base-files');
+});
+
+// D5. This repo dogfoods its own template, and the two copies are hand-maintained
+// with nothing generating either. The invariant is what makes this repo a live
+// test of what it ships; it should fail loudly the day someone hardens one copy
+// and forgets the other, which is the most likely way a workflow change gets
+// half-applied.
+//
+// The repair direction is deliberately live -> template, not the reverse.
+// Dependabot only scans `.github/workflows/`, so it can only ever bump the live
+// file; copying template -> live would silently revert a reviewed security bump.
+// If these two are ever meant to diverge, delete this test in the same PR and
+// say why.
+test('the base CI template and this repo\'s live CI stay identical', () => {
+  const template = normalize(readFileSync(join(REPO_ROOT, 'base/files/dot-github/workflows/ci.yml'), 'utf8'));
+  const live = normalize(readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8'));
+
+  assert.equal(
+    live,
+    template,
+    'base/files/dot-github/workflows/ci.yml and .github/workflows/ci.yml have drifted. '
+    + 'Repair by copying the LIVE file over the TEMPLATE, never the other way: Dependabot '
+    + 'can only bump the live copy, and copying template -> live reverts that bump.',
+  );
+});
+
+// H1a resolved each action's SHA once and reused it across every workflow file,
+// because nothing here runs vault.yml or library.yml: a transposed character in a
+// profile workflow surfaces in a downstream scaffold, not in this repo's CI. That
+// invariant had no enforcement, and it broke silently the first time Dependabot
+// ran. The bot only scans `.github/workflows/`, the drift test above compares only
+// the ci.yml pair, and the four workflow lint rules check each file in isolation --
+// so vault.yml and library.yml sat three major versions behind while every check
+// stayed green.
+//
+// The file list is discovered via workflowFiles(), never hardcoded, so a fifth
+// workflow is held to this rule the day it is added.
+test('every workflow file pins the same SHA for a given action', () => {
+  const USES = /^\s*(?:-\s+)?uses:\s*([\w.-]+\/[\w./-]+)@([0-9a-f]{40})[^\S\n]*(#.*)?$/;
+  const pins = new Map();
+
+  for (const rel of workflowFiles(REPO_ROOT)) {
+    for (const line of readFileSync(join(REPO_ROOT, rel), 'utf8').split(/\r?\n/)) {
+      const match = line.match(USES);
+      if (!match) continue;
+      const [, action, sha, comment] = match;
+      const pin = `${sha} ${(comment ?? '').trim()}`;
+      if (!pins.has(action)) pins.set(action, new Map());
+      const seen = pins.get(action);
+      if (!seen.has(pin)) seen.set(pin, []);
+      seen.get(pin).push(rel);
+    }
+  }
+
+  assert.equal(pins.size > 0, true, 'no pinned actions found -- the regex or the discovery is broken');
+
+  // Every inconsistent action is reported in one failure, not just the first.
+  // Bumping two actions at once is the normal case, and fixing one to discover
+  // the next on a re-run is how a half-finished propagation gets committed.
+  const mismatched = [...pins].filter(([, seen]) => seen.size > 1);
+  if (mismatched.length) {
+    const detail = mismatched.map(([action, seen]) => `${action} is pinned ${seen.size} ways:\n`
+      + [...seen].map(([pin, files]) => `  ${pin}\n    ${files.join('\n    ')}`).join('\n')).join('\n\n');
+    assert.fail(
+      `${mismatched.length} action(s) disagree across this repo's workflow files:\n${detail}\n`
+      + 'Resolve each SHA once and use it everywhere. Dependabot can only bump '
+      + '.github/workflows/, so the profile templates are updated by hand in the same PR.',
+    );
+  }
+});
+
+test('the base Dependabot template and this repo\'s live config stay identical', () => {
+  const template = normalize(readFileSync(join(REPO_ROOT, 'base/files/dot-github/dependabot.yml'), 'utf8'));
+  const live = normalize(readFileSync(join(REPO_ROOT, '.github/dependabot.yml'), 'utf8'));
+
+  assert.equal(live, template, 'base/files/dot-github/dependabot.yml and .github/dependabot.yml have drifted');
+});
+
+// daftplate dogfoods its own base layer: every file base/files/dot-github/ ships
+// has a live counterpart under .github/. Nothing checked that, and it was already
+// false -- ISSUE_TEMPLATE/feature-request.yml shipped to every scaffolded repo
+// while this repo filed its own enhancement issues with no template at all.
+//
+// Discovered rather than listed, for exactly that reason: the two pairs that were
+// pinned were pinned by hand, one test each, and the third pair was missed because
+// nobody wrote its test. A walk holds the next file added to the tree on the day
+// it lands.
+//
+// Content repair here is TEMPLATE -> LIVE: the base layer is the source of truth
+// and the live copy is the dogfood. The two files in INVERTED_REPAIR are the
+// exception and are compared by the dedicated tests above, because Dependabot can
+// only bump the live copy -- so copying template -> live would revert a reviewed
+// security bump. They are still held to the existence check; only their content
+// comparison lives elsewhere.
+const INVERTED_REPAIR = new Set(['workflows/ci.yml', 'dependabot.yml']);
+
+test('this repo mirrors every file the base dot-github layer ships', () => {
+  const templateRoot = join(REPO_ROOT, 'base/files/dot-github');
+  const shipped = walkFiles(templateRoot).filter((e) => !e.isDir).map((e) => e.rel).sort();
+
+  assert.ok(shipped.length > 0, 'walked base/files/dot-github and found no files -- the walk is broken, not the tree');
+
+  const missing = [];
+  const drifted = [];
+  for (const rel of shipped) {
+    const livePath = join(REPO_ROOT, '.github', rel);
+    if (!existsSync(livePath)) {
+      missing.push(rel);
+      continue;
+    }
+    if (INVERTED_REPAIR.has(rel)) continue;
+    const template = normalize(readFileSync(join(templateRoot, rel), 'utf8'));
+    if (normalize(readFileSync(livePath, 'utf8')) !== template) drifted.push(rel);
+  }
+
+  assert.deepEqual(
+    { missing, drifted },
+    { missing: [], drifted: [] },
+    'base/files/dot-github/ and .github/ have diverged. Repair by copying the TEMPLATE '
+    + 'over the LIVE file: the base layer is the source of truth for these. '
+    + `The one exception is ${[...INVERTED_REPAIR].join(' and ')}, repaired live -> template.`,
+  );
+});
+
+/** One `updates:` item, as raw lines. No YAML parser is available (CLAUDE.md #4),
+ *  so this walks indentation: an item starts at `- package-ecosystem: <x>` and
+ *  runs until the next line indented no deeper than that `-`.
+ *
+ *  Scoping to the item is the whole point, and three independent regexes over the
+ *  file would not do it. This config passes "contains github-actions" AND
+ *  "contains interval: weekly" while performing no action updates whatsoever:
+ *
+ *      updates:
+ *        - package-ecosystem: github-actions
+ *          directory: /
+ *        - package-ecosystem: npm
+ *          directory: /
+ *          schedule:
+ *            interval: weekly
+ *
+ *  Comments are stripped first so prose about the ecosystem cannot stand in for
+ *  a declaration of it. */
+function dependabotEntry(text, ecosystem) {
+  const lines = text.split(/\r?\n/).filter((line) => !/^\s*#/.test(line));
+  const opener = new RegExp(`^(\\s*)-\\s+package-ecosystem:\\s*['"]?${ecosystem}['"]?\\s*$`);
+  const start = lines.findIndex((line) => opener.test(line));
+  if (start === -1) return null;
+
+  const column = lines[start].match(/^\s*/)[0].length;
+  const body = [lines[start]];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
+    if (lines[i].match(/^\s*/)[0].length <= column) break;
+    body.push(lines[i]);
+  }
+  return body.join('\n');
+}
+
+// `github-actions` is the ecosystem that understands SHA pins: it rewrites the
+// hash and the trailing `# vX.Y.Z` comment together, which is why D1 made that
+// comment mandatory rather than decorative.
+test('the Dependabot config schedules github-actions updates in that same entry', () => {
+  const text = readFileSync(join(REPO_ROOT, '.github/dependabot.yml'), 'utf8');
+  assert.match(text, /^version: 2$/m);
+
+  const entry = dependabotEntry(text, 'github-actions');
+  assert.ok(entry, 'no github-actions entry in updates:');
+  assert.match(entry, /^\s+directory:\s*['"]?\/['"]?\s*$/m);
+  assert.match(entry, /^\s+schedule:\s*$/m);
+  assert.match(entry, /^\s+interval:\s*['"]?weekly['"]?\s*$/m);
+});
+
+// The extractor is the load-bearing part of the test above, so it gets its own
+// proof: the mutation that motivated it must not be readable as a scheduled
+// github-actions entry.
+test('dependabotEntry does not borrow a schedule from a neighbouring ecosystem', () => {
+  const mutated = [
+    'version: 2',
+    'updates:',
+    '  - package-ecosystem: github-actions',
+    '    directory: /',
+    '  - package-ecosystem: npm',
+    '    directory: /',
+    '    schedule:',
+    '      interval: weekly',
+    '',
+  ].join('\n');
+
+  const entry = dependabotEntry(mutated, 'github-actions');
+  assert.ok(entry, 'the entry itself is still present');
+  assert.equal(/interval:/.test(entry), false, 'the npm schedule must not leak into the actions entry');
 });

@@ -26,6 +26,8 @@ Every task's requirements implicitly include this section.>
 Estimated context is `sum(files-to-read) + 3× that for working churn`. If a row
 exceeds ~150k, split the phase at a real seam and add a row.
 
+Each phase names the evidence rung it targets (repo-standards §6.6).
+
 | Phase | Deliverable | Files to read | Bytes | Est. context | Exit criteria |
 |---|---|---|---|---|---|
 | 1 | <what ships> | <exact paths> | <sum> | <4× sum> | <observable, testable> |

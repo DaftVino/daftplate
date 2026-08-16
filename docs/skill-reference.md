@@ -45,7 +45,7 @@ repos that need them.
 
 **Failure modes:** Three terminal states, and only three. `CONTINUUM_BLOCKED_VALIDATION` — still invalid after one regeneration; writes and commits nothing, prints the violations for manual repair. `CONTINUUM_UNCOMMITTED` — valid, on disk and already printed, but the commit failed; deliberately neither blocked nor success, since the file exists but a `/clear` plus a branch switch would lose it. `CONTINUUM_COMMITTED` — the clean exit. A fourth path is not a terminal state at all: if `/handoff` fails in a way the skill could not work around, it stops and reports rather than generating a prompt — a prompt pointing at a note nobody wrote is worse than no prompt.
 
-**daftkit disposition:** held (until a real session runs a generated prompt end to end)
+**daftkit disposition:** v1.2 portable
 
 ### crit
 
@@ -213,7 +213,7 @@ These five ship inside the `app-monolith` profile's files and land in a scaffold
 |---|---|---|---|
 | brief | user-level | Toggle terse, result-first output for the session | v1.0 portable |
 | code-map | user-level | Generate a line-anchored symbol index so large files are read in slices | deferred to v1.1 (needs script vendoring) |
-| continuum | user-level | Hand the chat off and write the validated prompt the next one starts from | held (until a real session runs a generated prompt end to end) |
+| continuum | user-level | Hand the chat off and write the validated prompt the next one starts from | v1.2 portable |
 | crit | user-level | Design critique that refuses any appearance finding nobody rendered | held (needs a dependency manifest, startup validation, tested degraded mode) |
 | curious | user-level | Dial clarifying-question frequency moderately above default | v1.0 portable |
 | deliberate | user-level | Argue a contested plan/design through three Codex archetypes, chaired by the agent | deferred to v1.1 (needs script vendoring) |
@@ -222,7 +222,7 @@ These five ship inside the `app-monolith` profile's files and land in a scaffold
 | insist | user-level | Hard-gate every user question so it's answered by the user, never auto-decided | v1.0 portable |
 | new-project | user-level | Scaffold a standards-compliant repo from base + one profile overlay | daftplate-only (the scaffolding engine) |
 | orient | user-level | Emit a short session-start brief on repo state | v1.0 portable |
-| diagram | user-level | Analyze a repo through a lens and render an editable `.excalidraw` (structure working board / flowchart / ER / sequence) | daftplate-only (until proven) |
+| diagram | user-level | Analyze a repo through a lens and render an editable `.excalidraw` (structure working board / flowchart / ER / sequence) | v1.1 portable |
 | architecture-audit | repo-scoped (app-monolith) | Read-only drift audit of docs against the code | repo-scoped (app-monolith only) |
 | architecture-docs | repo-scoped (app-monolith) | Maintain small, linked C4-style Mermaid architecture views | repo-scoped (app-monolith only) |
 | database-schema | repo-scoped (app-monolith) | Migrate the schema additively and keep the DBML/ERDs current | repo-scoped (app-monolith only) |

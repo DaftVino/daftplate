@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import { inspect, render, resolveProfile, advisory, main, FOOTER } from '../scripts/check-machine.mjs';
+import {
+  inspect, render, toJson, resolveProfile, advisory, main, FOOTER,
+  inspectCheckout, isCheckout, gitAhead,
+} from '../scripts/check-machine.mjs';
+import { renderCheckoutBlock } from '../scripts/lib/checkout-marker.mjs';
 import { makeRepo, emptyDir } from './helpers/make-repo.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'check-machine.mjs');
@@ -169,11 +173,13 @@ test('the advisory is a single line, so it cannot bury the violation report', ()
 
 // --- the command ------------------------------------------------------------
 
-/** Runs main with everything impure injected. Returns the exit code and output. */
+/** Runs main with everything impure injected. Returns the exit code and output.
+ *  `checkout: null` by default so these stay off the real ~/.claude/CLAUDE.md and
+ *  spawn no git; the cases that care about the checkout pass their own. */
 const runMain = (args, present, extra = {}) => {
   const out = [];
   const code = main(['node', 'check-machine.mjs', ...args], {
-    entries: ENTRIES, probe: probeAll(present), log: (l) => out.push(l), cwd: emptyDir(), ...extra,
+    entries: ENTRIES, probe: probeAll(present), log: (l) => out.push(l), cwd: emptyDir(), checkout: null, ...extra,
   });
   return { code, text: out.join('\n') };
 };
@@ -294,4 +300,276 @@ test('the real command installs nothing — a missing tool stays missing', () =>
   const second = runReal({ PATH: emptyDir(), Path: emptyDir() });
   assert.equal(first.result.stdout, second.result.stdout, 'the run changed the machine');
   assert.match(first.result.stdout, /install: winget install Git\.Git/, 'it reports rather than acts');
+});
+
+// --- the recorded daftplate checkout (#100) ----------------------------------
+
+const block = (p) => `# gates\n\n${renderCheckoutBlock(p)}\n`;
+const RESOLVES = () => ({ ok: true, reason: null });
+const baseInspection = inspect({ entries: [], probe: () => true });
+
+test('a machine with no checkout record reports missing, and does not fail the run', () => {
+  const r = inspectCheckout({ readGlobal: () => null });
+  assert.equal(r.state, 'missing');
+});
+
+test('a record pointing at a directory that is not a daftplate checkout reports unresolvable', () => {
+  // D6: existence is not resolution. This directory IS there; it just is not a
+  // checkout, and the old existsSync-only design would have called it current.
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/gone'),
+    isCheckout: () => ({ ok: false, reason: 'no profiles/' }),
+  });
+  assert.equal(r.state, 'unresolvable');
+  assert.equal(r.recorded, 'X:/gone');          // the wrong path must be visible
+});
+
+test('a current checkout reports current, with no commit count', () => {
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => ({ behind: 0, fetchAgeDays: 1 }),
+  });
+  assert.equal(r.state, 'current');
+  assert.equal(r.behind, 0);
+});
+
+test('a checkout behind origin reports the commit count and the fetch age', () => {
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => ({ behind: 12, fetchAgeDays: 40 }),
+  });
+  assert.equal(r.state, 'behind');
+  assert.equal(r.behind, 12);
+  assert.equal(r.fetchAgeDays, 40);
+});
+
+test('an unavailable upstream reports unknown rather than current', () => {
+  // D4: a staleness check that goes green when origin/HEAD is unresolvable is
+  // worse than no check at all.
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => { throw new Error('no origin/HEAD'); },
+  });
+  assert.equal(r.state, 'unknown');
+});
+
+test('a machine with no git at all reports unknown, not current', () => {
+  // Measured: spawnSync on a missing binary returns status: null and an error
+  // object — NO exit code. `status > 0` or a truthiness check would fall
+  // through to 'current' here, which is the silent false-fresh D4 forbids.
+  const enoent = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => { throw enoent; },
+  });
+  assert.equal(r.state, 'unknown');
+  assert.notEqual(r.state, 'current');
+});
+
+test('gitAhead runs against the recorded checkout, not the process cwd', () => {
+  // The defect this plan's own first draft shipped: without -C, the checker
+  // reports staleness for whatever repo the developer is standing in.
+  const seen = [];
+  inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: (p) => { seen.push(p); return { behind: 0, fetchAgeDays: 0 }; },
+  });
+  assert.deepEqual(seen, ['X:/Projects/daftplate']);
+});
+
+test('a marker daftplate cannot bound is reported, not read as a recorded path', () => {
+  const r = inspectCheckout({ readGlobal: () => `${block('X:/a')}\n${block('X:/b')}` });
+  assert.equal(r.state, 'missing');
+  assert.equal(r.recorded, null);
+  assert.match(r.reason, /more than one/);
+});
+
+test('render and toJson both carry the checkout result', () => {
+  const opts = { readGlobal: () => null };
+  assert.equal(render(inspect({ entries: [], probe: () => true, checkout: inspectCheckout(opts) }))
+    .some((l) => /checkout/i.test(l)), true);
+  assert.equal('checkout' in toJson(inspect({ entries: [], probe: () => true, checkout: inspectCheckout(opts) })), true);
+});
+
+test('render and toJson omit the checkout entirely when it was not inspected', () => {
+  // setup-repo.mjs:311 calls inspect() without one, and computing it there would
+  // spawn three git processes per scaffold for a result advisory() never reads.
+  // Without this the protection is invisible and the next refactor removes it.
+  assert.equal(render(baseInspection).some((l) => /checkout/i.test(l)), false);
+  assert.equal('checkout' in toJson(baseInspection), false);
+});
+
+test('a broken or stale checkout is advice, not a gate', () => {
+  // Written so it can fail: main(..., { entries: [] }) returns 0 under any
+  // implementation, so every required tool is present here and only the
+  // checkout state varies.
+  for (const bad of ['missing', 'unresolvable', 'behind', 'unknown']) {
+    const { code } = runMain([], ['alpha', 'beta'], {
+      checkout: { recorded: 'X:/somewhere', state: bad, behind: 12, fetchAgeDays: 40, reason: null },
+    });
+    assert.equal(code, 0, `${bad} must not change the exit code`);
+  }
+});
+
+// --- the two impure functions, against real trees and a real git -------------
+
+const git = (dir, args) => {
+  const r = spawnSync('git', ['-C', dir, '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr || r.error?.message}`);
+  return r.stdout.trim();
+};
+
+/** A real bare origin and a real clone, so behind-counts are real rather than
+ *  mocked. Identity is set per-repo: a CI runner with no global user.email must
+ *  not fail these for an unrelated reason. */
+const gitRepo = (files = {}, opts = {}) => {
+  const work = makeRepo({ 'README.md': '# seed\n', ...files });
+  git(work, ['init', '-b', 'main']);
+  git(work, ['config', 'user.email', 'test@example.com']);
+  git(work, ['config', 'user.name', 'Test']);
+  git(work, ['add', '-A']);
+  git(work, ['commit', '-m', 'seed']);
+
+  const origin = emptyDir();
+  git(origin, ['init', '--bare', '-b', 'main']);
+  git(work, ['remote', 'add', 'origin', origin]);
+  git(work, ['push', '-u', 'origin', 'main']);
+
+  const clone = emptyDir();
+  git(clone, ['clone', origin, '.']);
+
+  if (!opts.skipFetch) {
+    // origin advances by two commits after the clone, then the clone fetches:
+    // that is what makes `behind` a real number rather than a stub.
+    for (const n of [1, 2]) {
+      writeFileSync(join(work, `later-${n}.md`), `${n}\n`, 'utf8');
+      git(work, ['add', '-A']);
+      git(work, ['commit', '-m', `later ${n}`]);
+    }
+    git(work, ['push']);
+    git(clone, ['fetch']);
+  }
+  if (opts.noOriginHead) git(clone, ['remote', 'set-head', 'origin', '--delete']);
+
+  return { work, origin, clone };
+};
+
+const addWorktree = (clone) => {
+  const at = join(emptyDir(), 'wt');       // must not exist yet
+  git(clone, ['worktree', 'add', at]);
+  return at;
+};
+
+const DAFTPLATE_SHAPE = {
+  'engineering-standards/repo-standards.md': '# std\n',
+  'scripts/apply-layer.mjs': 'export const x = 1;\n',
+  'profiles/web-app/profile.md': '# web-app\n',
+};
+
+test('isCheckout refuses a directory that is not a git repo', () => {
+  const r = isCheckout(makeRepo(DAFTPLATE_SHAPE));
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /git/);
+});
+
+test('isCheckout refuses a git repo with no standards file', () => {
+  assert.equal(isCheckout(gitRepo().clone).ok, false);
+});
+
+test('isCheckout refuses a repo that VENDORS the standards but is not daftplate', () => {
+  // THE case. Measured 2026-08-16: five unrelated repos in this workspace are
+  // git repos holding a vendored engineering-standards/repo-standards.md — the
+  // same stale 13,019-byte snapshot (sha256 C117010C), against a canonical
+  // 29,091. The pre-D6-revision check passed all five. Certifying one of them
+  // as the checkout is the original bug with a green tick on it.
+  const { clone } = gitRepo({ 'engineering-standards/repo-standards.md': '# stale\n' });
+  const r = isCheckout(clone);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /apply-layer|profiles/);      // says WHICH marker is absent
+});
+
+test('isCheckout accepts a real daftplate-shaped checkout', () => {
+  assert.equal(isCheckout(gitRepo(DAFTPLATE_SHAPE).clone).ok, true);
+});
+
+test('gitAhead counts real commits against origin HEAD', () => {
+  const { clone } = gitRepo();                 // origin advanced by 2 after cloning
+  assert.equal(gitAhead(clone).behind, 2);
+});
+
+test('gitAhead resolves FETCH_HEAD in a worktree, where .git is a FILE', () => {
+  // D3 accepts worktrees and D4 chose `rev-parse --git-path FETCH_HEAD` for
+  // exactly this. Nothing else in the suite proves that choice was right.
+  const { clone } = gitRepo();
+  const wt = addWorktree(clone);
+  git(wt, ['fetch']);            // FETCH_HEAD is per-worktree, so the worktree must fetch
+  assert.equal(statSync(join(wt, '.git')).isFile(), true);   // the premise
+  assert.equal(gitAhead(wt).behind, 2);
+  // A NUMBER, not merely "not undefined": the plan wrote this as
+  // notEqual(fetchAgeDays, undefined), which null also satisfies — so the
+  // join(path, '.git', 'FETCH_HEAD') mutation this test exists to kill passed it.
+  // Issue #97's class, found by applying the mutation rather than trusting the test.
+  // It is a number only because --git-path resolves into .git/worktrees/<name>/,
+  // which is exactly what path construction onto a .git FILE cannot reach.
+  assert.equal(typeof gitAhead(wt).fetchAgeDays, 'number');
+});
+
+test('gitAhead reports an unknown age when the repo has never fetched', () => {
+  const { clone } = gitRepo({}, { skipFetch: true });
+  assert.equal(gitAhead(clone).fetchAgeDays, null);   // null, never 0
+});
+
+test('a null fetch age reaches the user as unknown-age, not as a silent current', () => {
+  // Proving gitAhead returns null is not the same as proving inspectCheckout
+  // does something honest with it. Without this the mapping is unasserted.
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => ({ behind: 0, fetchAgeDays: null }),
+  });
+  assert.equal(r.fetchAgeDays, null);
+  assert.match(render({ ...baseInspection, checkout: r }).join('\n'), /never fetched|age unknown/);
+});
+
+test('gitAhead reports unknown when origin/HEAD does not resolve', () => {
+  const { clone } = gitRepo({}, { noOriginHead: true });
+  assert.throws(() => gitAhead(clone));          // caught by inspectCheckout -> unknown
+});
+
+test('the report names the ref it compared against, not a generic upstream', () => {
+  // gitAhead resolves origin/HEAD and returns it; if inspectCheckout drops it, the
+  // stale line can never say which ref it counted against and renderCheckout's
+  // fallback becomes the only branch that ever runs.
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => ({ target: 'origin/main', behind: 12, fetchAgeDays: 2 }),
+  });
+  assert.equal(r.target, 'origin/main');
+  assert.match(render({ ...baseInspection, checkout: r }).join('\n'), /12 commit\(s\) behind origin\/main/);
+});
+
+test('a commit count that will not parse is unknown, never current', () => {
+  // The silent false-current D4 forbids, one layer lower than the missing-git case:
+  // `behind > 0` is false for NaN, so an unparseable count would report a machine
+  // that was never actually compared as up to date.
+  const r = inspectCheckout({
+    readGlobal: () => block('X:/Projects/daftplate'),
+    isCheckout: RESOLVES,
+    gitAhead: () => ({ behind: Number.NaN, fetchAgeDays: 1 }),
+  });
+  assert.equal(r.state, 'unknown');
+  assert.notEqual(r.state, 'current');
+});
+
+test('gitAhead refuses a commit count git did not print as a number', () => {
+  const run = (path, args) => (args[1] === '--abbrev-ref'
+    ? { status: 0, stdout: 'origin/main\n' }
+    : { status: 0, stdout: 'fatal: something went sideways\n' });
+  assert.throws(() => gitAhead('X:/anywhere', { run }), /count/);
 });

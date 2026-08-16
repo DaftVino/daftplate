@@ -58,6 +58,33 @@ A private repo that later goes public gains free secret scanning at that moment 
 
 If a secret does land in history: **rotate the credential first** (treat it as burned — scrubbing history is cleanup, not remediation), then rewrite history only if the repo is public.
 
+### 2.2 CI supply chain
+
+Everything a workflow pulls in is code that runs with the job's credentials. Both
+rules below are enforced mechanically by `checkWorkflows` in
+`scripts/verify-templates.mjs`, over every workflow the daftplate repo ships.
+
+1. **Every `uses:` is pinned to a full 40-character commit SHA**, with a trailing
+   `# vX.Y.Z` comment naming the release. `@v4` is a tag, and a tag is a mutable
+   pointer the action's owner — or anyone who compromises them — can repoint at
+   different code after the pin was reviewed. The comment is not decoration: the
+   SHA alone tells a reader nothing, and Dependabot rewrites the comment when it
+   bumps the pin.
+2. **Anything downloaded is verified against a digest committed in the workflow
+   file, before it is executed or extracted.** Two failure modes, both real:
+   piping a download straight into `tar` or `bash` makes the bytes never a file,
+   so nothing *can* check them; and fetching the project's own checksums file
+   from the same release at the same moment verifies nothing, because whoever
+   can alter the artifact can alter the checksums beside it. The trust anchor
+   has to be a literal that a human reviewed in a diff. Bumping the version and
+   bumping the digest are one commit, never two.
+
+**Least privilege alongside them.** Every job declares `permissions: contents:
+read` unless it demonstrably needs more, and every `actions/checkout` sets
+`persist-credentials: false`. Checkout writes `GITHUB_TOKEN` into `.git/config`
+by default, which leaves the repo credential in reach of every later step —
+including, in the case above, a third-party binary the job just downloaded.
+
 ## 3. Canonical folder structure
 
 Minimal template. Create folders only when there is content for them — empty scaffolding is noise.
@@ -72,6 +99,7 @@ repo-name/
 │   ├── architecture.md   # How the system works (living doc, kept current)
 │   ├── designs/          # Fix/feature plans, written BEFORE the work (§6.2)
 │   ├── adr/              # Architecture Decision Records (§6.3)
+│   ├── records/          # Durable output of a skill, namespaced per skill (§6.3)
 │   └── *.md              # Guides: setup, troubleshooting, runbooks
 ├── .github/
 │   ├── ISSUE_TEMPLATE/   # bug-report.yml, feature-request.yml
@@ -82,7 +110,7 @@ repo-name/
 
 Rules of thumb:
 
-- `docs/` is flat except for `designs/` and `adr/`. Don't create `docs/bugs/`, `docs/fixes/`, `docs/plans/`, `docs/tests/` — each of those has a proper home (§6).
+- `docs/` is flat except for `designs/`, `adr/` and `records/`. Don't create `docs/bugs/`, `docs/fixes/`, `docs/plans/`, `docs/tests/` — each of those has a proper home (§6). A profile's `docs-subdirs` adds to those three; it never replaces them.
 - One concept, one file. A troubleshooting guide and a setup guide are two files, not sections of a mega-doc.
 - Media goes in `assets/`, not a capitalized `Logo/` at root.
 
@@ -180,6 +208,15 @@ The *why* goes in the body, where there is room to be precise about it.
 - Every released version gets: a `CHANGELOG.md` entry (Keep-a-Changelog: Added/Changed/Fixed/Removed), an annotated git tag `vX.Y.Z`, and a GitHub Release created from that tag (`gh release create vX.Y.Z --notes-from-tag` or paste the changelog section).
 - The version displayed in the app must come from one source of truth per repo (a constant or `package.json`), bumped in the release commit: `chore(release): v2.0.6`.
 - A changelog entry with no matching tag is a violation — the tag is what makes the version traceable.
+- **A release is not done until all four artifacts exist.** Bumping the version constant and writing the changelog entry is half a release; the tag and the GitHub Release are the half that makes it findable. Treat `chore(release): vX.Y.Z` as the *start* of the release, not the end.
+
+### 5.1 How this is enforced
+
+Stating the rule is not enforcing it. Measured 2026-07-28: two consecutive releases in this repo's own toolchain shipped with a changelog entry, a version bump, and no tag — a three-day gap nothing detected, because §5 was prose and no check read it. Enforcement is layered, and each layer names what it catches:
+
+1. **Release procedure.** Whatever cuts your release must create all four artifacts in one sequence. **`/ship` does not tag** — it says "the final commit gets the version tag", meaning the version string in the commit message, and never runs `git tag` or `gh release create`. Read that as a known gap and tag by hand after it, or the release stops at half-done exactly the way it did here.
+2. **Publish gate (fail-closed).** A repo with a public export refuses to publish a changelog whose released versions are not all tagged: publishing is where an untagged release stops being a local oversight and becomes a public claim. In this repo that is `scripts/publish.mjs` — `untaggedReleases()` is a pure check over changelog text and a tag list, so the rule is testable without a git call. A dry run reports the gap and is not refused, because it copies nothing and refusing it would break the inspection a dry run exists for.
+3. **Periodic sweep.** A commit-time gate cannot work: between the release commit and the tag push the tag legitimately does not exist, so the check would false-fire or need a grace period. The invariant is *"a released version is traceable"* — a state converged to within minutes, not a property of a single commit. Detect drift with a periodic cross-repo scan rather than a blocking hook, which is also the only layer that reaches repos never scaffolded from a template.
 
 ## 6. Tracking taxonomy: where things live
 
@@ -206,11 +243,15 @@ A design doc is a **work plan written before the work**. File: `docs/designs/YYY
 
 Design docs are point-in-time artifacts — they go stale by design and are never updated after implementation (append a one-line `Outcome:` note at most). Lasting knowledge gets promoted to `docs/architecture.md` or an ADR.
 
+**Size budgets.** A design doc stays ≤ ~15KB; past that it splits into a parent contract and per-phase children. Specs are written only for work scheduled within the next two slices — no spec ahead of demand. Generated artifacts (code maps and similar) ship as an index plus shards small enough to read whole. Any doc whose guidance includes "read in slices, never whole" is over budget by definition; split it. **Lifecycle:** superseded planning docs move to `docs/archive/`, which `/orient` and reading-order rules skip. Corrections of the do-not-revert class are extracted into a single always-read `docs/designs/hard-won-constraints.md` (≤ ~4KB) rather than living inside the handoff logs that discovered them.
+
 ### 6.3 Decisions → `docs/adr/`
 
 An ADR records a decision and its rationale so future-you (or an agent) doesn't re-litigate it. File: `docs/adr/NNNN-slug.md`, lightweight MADR format ([template](templates/adr.md)): Status / Context / Decision / Consequences, one page max.
 
 Write one when a decision is expensive to reverse, constrains future work, or you've already argued about it twice. Expect 2–5 per repo per year. ADRs are never edited after acceptance — a reversal is a *new* ADR that supersedes the old one (update the old one's Status line only).
+
+**Records → `docs/records/<skill>/`.** When a skill produces a durable artefact that is neither a plan nor a decision — the transcript and falsifiers of an expensive review, say — it goes in `docs/records/<skill-name>/YYYY-MM-DD-slug.md`, namespaced by the skill that wrote it. `/deliberate` writes `docs/records/deliberate/`. The namespace is what keeps this from becoming a second `docs/misc/`: a directory with no owning skill does not belong here. `records/` is universal — allowed in every repo whatever its profile, and a profile's `docs-subdirs` adds to it rather than replacing it. An ADR still owns the *decision*; the record owns the argument that produced it, so a record without a corresponding ADR or issue is a transcript nobody will act on.
 
 ### 6.4 What is deliberately NOT a document
 
@@ -231,7 +272,21 @@ Tasks are tracked on a GitHub Project. The rules exist so the board stays a *vie
 7. **Status: Backlog → Ready → In progress → In review → Done.** Movement is automated (auto-add on issue open, auto-move to Done on close). Manual dragging is a smell: it means the issue and the board have diverged.
 8. **No estimate or size fields.** Effort estimation carries little signal when the executor is an agent, and an unused field is a field that lies.
 
+### 6.5.1 Variant: boards on Linear
+
+A repo may move its board from GitHub Projects to Linear when phased work with real dependencies, milestone structure, or cross-repo visibility outgrows Projects. The precedent and full rationale is daft-cal's ADR 0016; a repo adopting this variant records its own ADR pointing there.
+
+The three §6.5 anchors transpose, not lapse: one Linear Project per repository, never cross-repo; the GitHub issue stays canonical for *existence* while Linear is canonical for *state*; and no-draft-cards becomes *nothing tracked may live only in a Linear document or project description*. On top of them: **creation is always GitHub** (`gh issue create` from templates — on the free plan, Linear→GitHub creation sync works for exactly one repo, so a GitHub-creation process is the only one every repo can copy; keep that sync off even where it would work). Issues are **dressed in Linear within 24h**: priority (Urgent/High/Medium = P1/P2/P3 of rule 6; Low = parked), milestone, blocking relations — an undressed issue is the variant failing. **Milestones mirror the repo's ROADMAP sections**, per §6.6. **Done requires evidence attached as a comment** (§6.6's ladder), and PRs close via `Fixes #N` with the GitHub number — identifier sequences drift and are never computed from each other. Known bounds, watched at the repo's weekly triage: 250-issue sync ceiling (close-and-archive before ~200), 10MB attachment sync limit (large artifacts go in the repo, linked from the issue).
+
 Creating the project needs the `project` scope on the `gh` token: `gh auth refresh -s project`.
+
+### 6.6 Evidence: what "done" means
+
+Every claim of completeness names a rung on this ladder: `specified → unit-tested → persisted → wired → real-provider-proven → journey-accepted → beta-ready`. A handoff note, issue closure, or plan that says "complete" without naming the rung is malformed. Closing an issue at `journey-accepted` or above requires the evidence attached as a comment — a test run, a command transcript, a screenshot of the real journey; green unit tests alone close nothing above `unit-tested`.
+
+App-profile repos additionally keep a **ROADMAP.md at root**: the repo's only live state document, sectioned Now / Next / Later (plus a parked list), with each Now/Next row naming the evidence that closes it. Session handoffs go to issue comments; next-session-prompt files and standalone remaining-work docs are forbidden — they multiply, go stale, and get read anyway. Plans in `docs/designs/` still follow §6.2; the ROADMAP is state, not planning.
+
+Repos with a product surface also declare a **charter** (target user, wedge, non-goals) — in the ROADMAP's standing-decisions block or an ADR — and `writing-plans` must cite the charter line a plan serves. A plan serving no line is rejected at review, which is the moment scope creep becomes visible instead of retrospective.
 
 ## 7. AI agent integration
 
@@ -269,3 +324,11 @@ Migration checklist per file: (1) create the issue, (2) move investigation to co
 6. First ADR (`0001-…`) if the repo embodies a non-obvious platform choice.
 7. Branch protection on `main`: require PR (even solo).
 8. Tag `v0.1.0` at first working state; start `CHANGELOG.md`.
+
+## 10. Executing with agents
+
+**Vertical slices, not parallel surfaces.** Product work is built as sequenced vertical slices — each proving one user journey end-to-end at `real-provider-proven` or better — never as parallel waves of product surfaces. Parallel agents are permitted *within* a slice after its contract freezes: one schema/API owner, non-overlapping file ownership, an independent review agent, and a journey agent that runs the real flow before merge. Work-in-progress caps at one product slice plus one infra/security slice.
+
+**Model routing.** Mechanical, high-volume work goes to the cheap tier; judgment, review, and security-sensitive work to the strong tier; the default shape is one strong reviewer over N cheap generators. Per-machine capabilities and limits (sandbox constraints, argv/timeout ceilings, account usage caps) are recorded in a durable environment-notes doc in the repo that discovered them and mirrored to `hard-won-constraints.md` — never only in a session prompt.
+
+**Session brief contract.** Every agent brief states: outcome, the user journey it serves, allowed files, forbidden files/domains, existing interfaces, non-goals, database/rollback requirements, required tests (unit / integration / live / cross-tenant as applicable), and the evidence to return. No deploy or push unless explicitly authorized.

@@ -4,8 +4,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeRepo, emptyDir } from './helpers/make-repo.mjs';
-import { injectFragments, fillPlaceholders, scaffold } from '../scripts/scaffold.mjs';
-import { PROVENANCE_FILE, fileDigest, readProvenance } from '../scripts/lib/provenance.mjs';
+import {
+  injectFragments, fillPlaceholders, scaffold, SCAFFOLD_INPUT_TOKENS,
+} from '../scripts/scaffold.mjs';
+import {
+  PROVENANCE_FILE, MAX_PROVENANCE_SCHEMA, fileDigest, readProvenance,
+} from '../scripts/lib/provenance.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -120,4 +124,33 @@ test('every base-layer file is recorded as layer base, mode copied', () => {
   assert.equal(p.files['README.md'].layer, 'base');
   assert.equal(p.files['README.md'].mode, 'copied');
   assert.equal(p.files['.github/workflows/ci.yml'].layer, 'base');
+});
+
+test('scaffold writes only current-schema managed entries', () => {
+  const dest = emptyDir();
+  scaffold(ROOT, 'web-app', dest, {
+    year: 2026,
+    tokens: {
+      PROJECT_NAME: 'schema-two',
+      PROJECT_SUMMARY: 'Schema 2 fixture.',
+    },
+  });
+
+  const manifest = readProvenance(dest);
+
+  assert.equal(manifest.schema, MAX_PROVENANCE_SCHEMA);
+  assert.ok(Object.values(manifest.files).length > 0);
+  assert.equal(
+    Object.values(manifest.files).every(
+      (entry) => entry.ownership === 'managed' && !('templateDigest' in entry),
+    ),
+    true,
+  );
+});
+
+test('scaffold exports the enrollment input token contract', () => {
+  // The token names scaffold() cannot derive. VERIFY_COMMAND, TEST_COMMAND and
+  // DEPLOY_COMMAND are read from profile.md, so an operator never supplies them;
+  // enrollment consumes this export rather than restating the list.
+  assert.deepEqual(SCAFFOLD_INPUT_TOKENS, ['YEAR', 'PROJECT_NAME', 'PROJECT_SUMMARY']);
 });

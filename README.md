@@ -1,6 +1,9 @@
-# daftplate
+<p align="center">
+  <img src="assets/daftplate-logo.png" alt="daftplate" width="225">
+</p>
 
-Type-aware repository scaffolding, agent skills, and context-budget discipline for a solo, AI-heavy development workflow.
+
+Daft Plate is type-aware repository scaffolding, agent skills, and context-budget discipline for a solo, AI-heavy development workflow.
 
 > **This is a curated export of a private working repo.** It is published one-directionally by `scripts/publish.mjs` — a fix made here is not upstreamed, and the working history, design documents, and issue history stay private. What you see is the code, the standards, the tests, and a curated account of how it was built.
 

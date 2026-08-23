@@ -137,6 +137,21 @@ test('an unreadable .daftplate.json degrades to no profile rather than throwing'
   assert.equal(resolveProfile([], dir), null);
 });
 
+// A manifest from a LATER daftplate is structurally valid, not corrupt, so the
+// schema gate throws rather than parsing it. That throw lands in the same catch,
+// which is right -- refusing to report on a machine because another repo is
+// ahead would help nobody -- but it is now a decision with a test rather than a
+// side effect. Whether check-machine should print a distinguishing line is a
+// check-machine question and is deliberately not reopened here.
+test('an unsupported schema degrades resolveProfile to no-profile rather than throwing', () => {
+  const dir = makeRepo({
+    '.daftplate.json': `${JSON.stringify({ schema: 99, profile: 'web-app', files: {} })}
+`,
+  });
+
+  assert.equal(resolveProfile([], dir), null);
+});
+
 test('an empty tier prints no heading', () => {
   const onlyRequired = ENTRIES.filter((t) => t.tier === 'required');
   const lines = render(inspect({ entries: onlyRequired, probe: probeAll([]) }));

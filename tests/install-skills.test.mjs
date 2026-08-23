@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  readFileSync, existsSync, writeFileSync, renameSync, readdirSync, linkSync,
+} from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeRepo, emptyDir } from './helpers/make-repo.mjs';
 import { installSkills, registerReportGate, recordCheckout, GATES_SENTINEL, main } from '../scripts/install-skills.mjs';
@@ -9,6 +11,7 @@ import { installSkills, registerReportGate, recordCheckout, GATES_SENTINEL, main
 // script: task 1.0 extracted it precisely so the writer, the checker and the tests read
 // one definition.
 import { CHECKOUT_MARKER_OPEN, CHECKOUT_MARKER_CLOSE } from '../scripts/lib/checkout-marker.mjs';
+import { writeAtomically } from '../scripts/lib/atomic-write.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -477,4 +480,120 @@ test('the gates sentinel resolves against the shipped template', () => {
   // every install on earth reports gates missing — so the two are pinned together.
   const text = readFileSync(join(ROOT, 'engineering-standards', 'claude-md-global.md'), 'utf8');
   assert.equal(text.includes(GATES_SENTINEL), true);
+});
+
+// ---------------------------------------------------------------------------
+// The shared atomic writer (Phase 3, Task 3.0). Lifted out of this file rather
+// than reimplemented, so both callers get the same staging, mode, retry and
+// cleanup rules. Its tests stay here because this is where it was paid for.
+// ---------------------------------------------------------------------------
+
+const eperm = () => Object.assign(new Error('busy'), { code: 'EPERM' });
+
+test('writeAtomically supports an arbitrary target basename in its own directory', () => {
+  const root = emptyDir();
+  const target = join(root, '.daftplate.json');
+
+  const refusal = writeAtomically(target, '{"schema":2}\n', { replace: false });
+
+  assert.equal(refusal, null);
+  assert.equal(readFileSync(target, 'utf8'), '{"schema":2}\n');
+  assert.deepEqual(readdirSync(root), ['.daftplate.json']);
+});
+
+test('writeAtomically retries EPERM three times and never falls back to a plain write', () => {
+  const root = emptyDir();
+  const target = join(root, 'settings.json');
+  writeFileSync(target, 'old\n', 'utf8');
+  let attempts = 0;
+
+  const refusal = writeAtomically(target, 'new\n', {
+    rename: () => { attempts += 1; throw eperm(); },
+  });
+
+  assert.equal(attempts, 3);
+  assert.match(refusal, /open in another process/i);
+  assert.equal(readFileSync(target, 'utf8'), 'old\n');
+  assert.deepEqual(readdirSync(root), ['settings.json']);
+});
+
+test('writeAtomically propagates non-EPERM rename errors after exact cleanup', () => {
+  const root = emptyDir();
+  const target = join(root, 'CLAUDE.md');
+
+  assert.throws(
+    () => writeAtomically(target, 'new\n', {
+      rename: () => { throw Object.assign(new Error('cross-volume'), { code: 'EXDEV' }); },
+    }),
+    /cross-volume/,
+  );
+  assert.equal(existsSync(target), false);
+  assert.deepEqual(readdirSync(root), []);
+});
+
+test('writeAtomically stages in a private directory, not beside the target', () => {
+  // Pins the mkdtemp reason recorded where this routine used to live: two
+  // concurrent writers to two different targets in one directory must not share
+  // a staging path. A basename-derived temp name in the target directory would
+  // reintroduce exactly that collision.
+  const root = emptyDir();
+  const seen = [];
+  const capture = (from) => { seen.push(from); throw eperm(); };
+
+  writeAtomically(join(root, 'a.json'), '{}\n', { rename: capture });
+  writeAtomically(join(root, 'b.json'), '{}\n', { rename: capture });
+
+  // Deduplicated because each write retries the publisher three times on EPERM,
+  // so a staging path legitimately repeats within one write. The count is asserted
+  // rather than only the uniqueness: on an implementation that never stages, seen
+  // is empty and every other assertion here holds vacuously.
+  const staged = [...new Set(seen)];
+  assert.equal(staged.length, 2, 'two writes, two distinct staging paths');
+  for (const from of staged) assert.notEqual(dirname(from), root);
+  assert.deepEqual(readdirSync(root), []);
+});
+
+test('writeAtomically create-only mode refuses an existing final path', () => {
+  const root = emptyDir();
+  const target = join(root, '.daftplate.json');
+  writeFileSync(target, 'winner\n', 'utf8');
+
+  const refusal = writeAtomically(target, 'loser\n', { replace: false });
+
+  assert.match(refusal, /already exists|appeared/i);
+  assert.equal(readFileSync(target, 'utf8'), 'winner\n');
+});
+
+test('create-only publication refuses a target that appears after staging', () => {
+  // The race a checked rename cannot observe: the rival lands between the
+  // existence check and publication. The seam is the publisher itself, so
+  // nothing passes by checking earlier.
+  const root = emptyDir();
+  const target = join(root, '.daftplate.json');
+
+  const refusal = writeAtomically(target, '{"loser":true}\n', {
+    replace: false,
+    link: (from, to) => {
+      writeFileSync(to, '{"winner":true}\n', 'utf8');   // rival wins the race
+      linkSync(from, to);                               // must now throw EEXIST
+    },
+  });
+
+  assert.match(refusal, /already exists|appeared/i);
+  assert.equal(readFileSync(target, 'utf8'), '{"winner":true}\n');
+  assert.deepEqual(readdirSync(root), ['.daftplate.json']);
+});
+
+test('create-only publication refuses rather than falling back without hard links', () => {
+  const root = emptyDir();
+  const target = join(root, '.daftplate.json');
+
+  const refusal = writeAtomically(target, '{"schema":2}\n', {
+    replace: false,
+    link: () => { throw Object.assign(new Error('nope'), { code: 'ENOTSUP' }); },
+  });
+
+  assert.match(refusal, /hard link/i);
+  assert.equal(existsSync(target), false);
+  assert.deepEqual(readdirSync(root), []);
 });

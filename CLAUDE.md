@@ -13,7 +13,7 @@
 
 ## Issue tracking
 
-Issues are **created in GitHub** (`gh issue create`, templates) and **managed in Linear** — a deliberate deviation from `repo-standards.md` §6.5 (ADR 0006). Workspace `DaftForge`, team `FORGE`, project [daftplate](https://linear.app/daftforge/project/daftplate-36e233e735dc), kept in step by Linear's GitHub Issues Sync — never create an issue directly in Linear. Dress in Linear within 24h of filing: priority (Urgent=P1 blocks release · High=P2 lands this branch · Medium=P3 follow-up · Low=parked), milestone, blocking relations. Status Done requires evidence attached as a comment. PRs close with `Fixes #N` (GitHub number) — GitHub and Linear sequences drift, never compute one from the other.
+Issues are **created in GitHub** (`gh issue create`, templates) and **managed in Linear** — a deliberate deviation from `repo-standards.md` §6.5 (ADR 0006). Workspace `DaftForge`, team `FORGE`, project [daftplate](https://linear.app/daftforge/project/daftplate-36e233e735dc), kept in step by Linear's GitHub Issues Sync — never create an issue directly in Linear. Dress in Linear within 24h of filing: priority (Urgent=P1 blocks release · High=P2 lands this branch · Medium=P3 follow-up · Low=parked), milestone, blocking relations. Status Done requires evidence attached as a comment. PRs close with `Fixes #N` (GitHub number) — GitHub and Linear sequences drift, never compute one from the other. Name an issue `#N (FORGE-M)` everywhere a human reads it — PR bodies, review comments, issue cross-references, handoff notes, session prompts, commit bodies — `owner/repo#N (FORGE-M)` when it is another repo's issue, bare only in the same act that files it, and never in the `Fixes #N` footer or a commit summary line (§6.5.1).
 
 ## Commands
 
@@ -55,6 +55,6 @@ Key routing rules:
 - Ship/deploy/PR → invoke /ship or /land-and-deploy
 - Publish/sync the public export repos (`daftplate`, `daftkit`) → invoke /publish
 - Handing off *and* starting a fresh chat ("I'm going to clear") → invoke /continuum (writes the next session's prompt and validates it; delegates the note to /handoff)
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
+- Save or resume working context → invoke /context-save or /context-restore
+- Bring an existing repo under daftplate management → invoke /enroll (creates the manifest /sync-standards needs; one-shot)
 - Author a backlog-ready spec/issue → invoke /spec

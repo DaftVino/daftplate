@@ -16,6 +16,15 @@ const MARKER_SOURCES = {
   '<!-- profile:context -->': 'context-rules.md',
 };
 
+// The tokens scaffold() cannot derive and a caller must therefore supply. YEAR is
+// filled from values.year; PROJECT_NAME and PROJECT_SUMMARY from values.tokens.
+// The other three <TOKEN>s -- VERIFY_COMMAND, TEST_COMMAND, DEPLOY_COMMAND -- come
+// from the profile.md metadata block, so no operator ever names them.
+//
+// Exported so enrollment consumes the contract rather than restating it: a fourth
+// required token added here must not be something enroll-repo.mjs can silently miss.
+export const SCAFFOLD_INPUT_TOKENS = ['YEAR', 'PROJECT_NAME', 'PROJECT_SUMMARY'];
+
 const TEXT_ONLY = /\.(md|txt|json|ya?ml|m?js|cjs|ts|html|css|example)$/i;
 
 function textFiles(dir) {

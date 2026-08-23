@@ -4,13 +4,15 @@
 // Usage: node scripts/install-skills.mjs [--target <dir>] [--dry-run]
 import {
   existsSync, readdirSync, lstatSync, cpSync, readFileSync, writeFileSync,
-  mkdirSync, mkdtempSync, renameSync, unlinkSync, rmdirSync, statSync, chmodSync,
 } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { runCli } from './lib/cli.mjs';
 import { renderCheckoutBlock, findCheckoutSpan } from './lib/checkout-marker.mjs';
+// Temp-file-plus-rename with mode preservation, EPERM retry and exact cleanup.
+// It lived here until enrollment needed the same guarantees for .daftplate.json.
+import { writeAtomically } from './lib/atomic-write.mjs';
 
 export function installSkills(sourceRoot, targetRoot, opts = {}) {
   const skillsDir = join(sourceRoot, 'skills');
@@ -87,66 +89,6 @@ export const GLOBAL_TEMPLATE_REL = join('engineering-standards', 'claude-md-glob
  *  template by a test, because if the two drift every install on earth reports the
  *  gates missing. */
 export const GATES_SENTINEL = '## Non-negotiable gates';
-
-const RENAME_ATTEMPTS = 3;
-const RENAME_RETRY_MS = 150;
-
-/** Sync sleep with no dependency and no busy-wait. */
-function pause(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Write `contents` over `target` without ever leaving it half-written.
- *
- * Temp-file-plus-rename, with the temp file on the same volume as the target so the
- * rename is a rename and not a copy (measured 2026-08-16: a cross-volume rename fails
- * EXDEV). The staging directory is mkdtemp-derived rather than a fixed name, so two
- * concurrent installs cannot clobber each other's staging file.
- *
- * On NTFS a rename over a file that any process holds open throws EPERM — an editor
- * tab, antivirus mid-scan, another agent reading it. POSIX permits it. Retried three
- * times to clear a transient scan, then refused. It never falls back to a plain
- * writeFileSync: that would reintroduce the torn write precisely when contention makes
- * it most likely, and this file holds the user's non-negotiable gates (D7).
- *
- * Returns null on success, or the refusal reason.
- */
-function writeAtomically(claudeDir, target, contents, opts = {}) {
-  const rename = opts.rename ?? renameSync;
-  mkdirSync(claudeDir, { recursive: true });
-  const staging = mkdtempSync(join(claudeDir, '.daftplate-'));
-  const temp = join(staging, 'CLAUDE.md');
-
-  try {
-    writeFileSync(temp, contents, 'utf8');
-    // Replacing by rename gives the new file the temp file's mode (0600 from mkdtemp),
-    // which would silently tighten permissions on a file the user may have deliberately
-    // made group-readable. No-op on Windows.
-    if (existsSync(target)) chmodSync(temp, statSync(target).mode);
-
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        rename(temp, target);
-        return null;
-      } catch (err) {
-        if (err.code !== 'EPERM') throw err;   // only EPERM is a contention signal
-        if (attempt >= RENAME_ATTEMPTS) {
-          return `${target} is open in another process, so it was left untouched`;
-        }
-        pause(RENAME_RETRY_MS);
-      }
-    }
-  } finally {
-    // A failed rename leaves the temp file behind — daftplate debris in the user's
-    // .claude/. Guarded so a cleanup failure never masks the original error, and
-    // scoped to the directory this function itself created (CLAUDE.md #5).
-    try {
-      if (existsSync(temp)) unlinkSync(temp);
-      rmdirSync(staging);
-    } catch { /* nothing here is worth losing the real error over */ }
-  }
-}
 
 /** Splice the block into `text`, or append it when there is no span yet.
  *  Returns null when a marker is present but its span is unusable — that is a
@@ -249,7 +191,7 @@ export function recordCheckout(sourceRoot, claudeDir, opts = {}) {
 
   if (opts.dryRun) return result;
 
-  const refusal = writeAtomically(claudeDir, target, placed.text, opts);
+  const refusal = writeAtomically(target, placed.text, opts);
   return refusal ? refuse(refusal) : result;
 }
 

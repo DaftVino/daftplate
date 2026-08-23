@@ -14,7 +14,7 @@
 
 "Non-trivial" = multi-PR, touches persisted data, risky enough to review before coding, or an agent executes it unsupervised. Otherwise skip the design doc.
 
-Board variant: repos on the Linear board (repo-standards §6.5.1) still create every issue in GitHub; management happens in Linear.
+Board variant: repos on the Linear board (repo-standards §6.5.1) still create every issue in GitHub; management happens in Linear. Name an issue `#N (FORGE-M)` in anything a human reads — PR bodies, comments, handoff notes, commit bodies — qualified `owner/repo#N (FORGE-M)` when it lives in another repo, bare only in the same act as filing it, and never in the `Fixes #N` footer or a commit summary.
 
 ## GitHub Flow (every change)
 
@@ -29,7 +29,10 @@ Board variant: repos on the Linear board (repo-standards §6.5.1) still create e
 8. Issue auto-closes via "Fixes #42"
 ```
 
-Never commit directly to `main`. Branches live days, not weeks.
+Never commit directly to `main`. Branches live days, not weeks. Always branch off
+`main`, never off another branch — a stacked branch breaks when its parent
+squash-merges, and the fix is `git rebase --onto main <parent-tip> <child>`, not
+`git rebase main`.
 
 ## Release (when shipping a version)
 

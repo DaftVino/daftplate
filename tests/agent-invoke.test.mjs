@@ -356,6 +356,28 @@ test('AC 4 — a live authenticated call from the run\'s own configuration is re
     t.skip('this checkout\'s remote is readable anonymously, so ls-remote settles nothing here');
     return;
   }
+  if (verdict.reason === INVOKE_REFUSALS.NOT_ISOLATED && verdict.git?.visibility === 'unknown') {
+    // The same shape as the skip above, arriving under a different name because
+    // the visibility could not be read at all. `verifyGitHalf` treats an
+    // unanswerable visibility as the alarm rather than the excuse — a deliberate
+    // ruling, recorded and asserted in `a remote that answers anonymously settles
+    // nothing`, and not one this test may quietly reverse by being made green.
+    //
+    // But the alarm is not evidence *here*. This file ships in the daftplate
+    // export, whose remote is public and whose CI has no `gh` login, so
+    // `gh repo view` exits non-zero and the visibility is `unknown` while the
+    // anonymous `ls-remote` succeeds. Measured on the export's own CI 2026-09-08:
+    // this test failed there while the other 1506 passed.
+    //
+    // The skip is deliberately narrow, because a skip that widens is how a suite
+    // starts proving nothing. It requires the isolated call to have SUCCEEDED —
+    // the ambiguous case, indistinguishable from an anonymous read. A refusal, or
+    // a known-private remote, still lands on the assertions below.
+    assert.equal(verdict.git.call?.verdict, 'authenticated',
+      'the skip is for an ambiguous success; this refusal is a real result and must be asserted');
+    t.skip('the remote answered and its visibility could not be read, so this settles nothing here');
+    return;
+  }
   if (verdict.reason === INVOKE_REFUSALS.GH_INCONCLUSIVE) {
     // Both halves run now, so this test can be stopped by the other one. It is
     // about `git ls-remote`; the `gh` half has its own live test below with its

@@ -18,11 +18,12 @@
 //     [--write] [--json]
 import { execFileSync } from 'node:child_process';
 import {
-  existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync,
+  existsSync, lstatSync, mkdtempSync, readFileSync, rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { scaffold, SCAFFOLD_INPUT_TOKENS } from './scaffold.mjs';
+import { canonical } from './lib/fs.mjs';
 import { writeAtomically } from './lib/atomic-write.mjs';
 import { runCli } from './lib/cli.mjs';
 import { PROVENANCE_FILE, fileDigest, validateProvenance } from './lib/provenance.mjs';
@@ -30,7 +31,7 @@ import { PROVENANCE_FILE, fileDigest, validateProvenance } from './lib/provenanc
 // different questions -- isSafeRelPath proves a manifest KEY stays inside the
 // target, inspectTargetPath proves the FILESYSTEM does -- and a second copy here
 // would be a second thing to keep correct.
-import { isSafeRelPath, inspectTargetPath } from './sync-standards.mjs';
+import { isSafeRelPath, inspectTargetPath, isWithin } from './sync-standards.mjs';
 
 const VENDORED_STANDARDS = 'engineering-standards';
 
@@ -101,16 +102,6 @@ const defaultExecFile = (command, args) => execFileSync(command, args, {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'ignore'],
 });
-
-/** Canonical where the path exists, normalized where it does not — the injected
- *  execFile tests name paths no filesystem has. */
-const canonical = (path) => {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return resolve(path);
-  }
-};
 
 const samePath = (a, b) => {
   const [x, y] = [resolve(canonical(a)), resolve(canonical(b))];
@@ -198,7 +189,7 @@ export function inspectEnrollmentTarget(targetRoot, candidateRels, opts = {}) {
   // a filename with a newline in it, and splitting on one would invent two paths.
   const gitVisible = runGit(execFile, targetRoot, [
     'ls-files', '--cached', '--others', '--exclude-standard', '-z',
-  ]).split(' ').filter(Boolean).sort();
+  ]).split('\0').filter(Boolean).sort();
 
   const dirty = runGit(execFile, targetRoot, ['status', '--porcelain']).trim() !== '';
 
@@ -317,12 +308,14 @@ export function summarizeNonCandidates(gitVisible, candidateRels, opts = {}) {
 
 const STAGING_PREFIX = 'daftplate-enroll-';
 
-// Only ever called on a directory this process made with mkdtempSync, under the OS
-// temp root. Guarded rather than assumed because CLAUDE.md #5 makes "nothing
-// deletes what it did not create" absolute, and a recursive delete is the one
-// operation where being wrong is unrecoverable.
-function removeStaging(staging) {
-  const root = tmpdir();
+// Only ever called on a directory this process made with mkdtempSync, under the
+// temp root CAPTURED AT CREATION — not tmpdir() read again here, which is what
+// this used to do. Reading it again lets an environment change between staging and
+// cleanup turn a legitimate removal into a refusal, or validate a path against a
+// root that no longer holds it. Guarded rather than assumed because CLAUDE.md #5
+// makes "nothing deletes what it did not create" absolute, and a recursive delete
+// is the one operation where being wrong is unrecoverable.
+function removeStaging(staging, root) {
   if (!staging.startsWith(root + sep) || !staging.includes(STAGING_PREFIX)) {
     throw new Error(`refusing to remove a staging path outside ${root}: ${staging}`);
   }
@@ -381,7 +374,22 @@ export function enrollRepo(templatesRoot, targetRoot, opts = {}) {
     );
   }
 
-  const staging = mkdtempSync(join(tmpdir(), STAGING_PREFIX));
+  // Captured once, before staging exists, and used for both creation and the
+  // cleanup guard — sync's shape, for sync's reason. Enrollment never had this
+  // check: TMPDIR=<target> wrote a full scaffold, second .daftplate.json included,
+  // into the repository being enrolled. It also corrupted the report without
+  // needing to be interrupted, because inspectEnrollmentTarget runs after
+  // composition and its `git ls-files --others` then saw the staging tree and
+  // counted daftplate's own scaffold as files the repository owns. This closes
+  // that too, with no reordering: staging can no longer be inside the target.
+  const tempRoot = resolve(tmpdir());
+  if (isWithin(targetRoot, tempRoot)) {
+    throw refuse(
+      `the OS temp root is inside the target (${tempRoot}); `
+      + 'staging would be written into the repository being enrolled',
+    );
+  }
+  const staging = mkdtempSync(join(tempRoot, STAGING_PREFIX));
   try {
     // The real scaffold, never a relaxed composer for existing repositories (D4).
     // Reimplementing its four steps would drift, and drift here means every
@@ -446,7 +454,7 @@ export function enrollRepo(templatesRoot, targetRoot, opts = {}) {
       reports: proposal.reports,
     };
   } finally {
-    removeStaging(staging);
+    removeStaging(staging, tempRoot);
   }
 }
 

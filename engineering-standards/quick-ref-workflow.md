@@ -31,6 +31,12 @@ Board variant: repos on the Linear board (repo-standards §6.5.1) still create e
 
 Never commit directly to `main`. Branches live days, not weeks.
 
+Branch names are `type/N-slug` — `fix/62-scaffold-dest-guard` — and a pre-push
+hook installed by `setup-repo` refuses anything else, plus any direct push to
+`main`. Rename with `git branch -m <type>/<issue>-<slug>`; to push once anyway,
+`DAFTPLATE_ALLOW_NONSTANDARD_BRANCH=1 git push`. Re-run `setup-repo` in an older
+repo to install the hook.
+
 ## Release (when shipping a version)
 
 ```

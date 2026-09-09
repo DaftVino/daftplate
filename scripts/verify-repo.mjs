@@ -14,6 +14,7 @@ export const REQUIRED_ROOT_FILES = ['README.md', 'LICENSE', 'CHANGELOG.md', 'CLA
 export const ALLOWED_UPPERCASE_ROOT = [
   'README.md', 'LICENSE', 'CHANGELOG.md', 'CLAUDE.md',
   'CONTRIBUTING.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'AGENTS.md',
+  'ROADMAP.md',
 ];
 
 // Gitignored configs that must have a committed sanitized twin (repo-standards §2.1).
@@ -25,6 +26,25 @@ const TEXT_EXTENSIONS = new Set([
 
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+)*$/;
 
+// Ecosystem root files a toolchain looks up by exact name: Dockerfile, Makefile,
+// Procfile, Justfile, Gemfile, Rakefile, Jenkinsfile, Caddyfile. Docker finds no
+// default without -f, so renaming one to satisfy a style rule breaks the build —
+// the rule has to bend, not the filename.
+//
+// Matched by SHAPE, not by a list. An enumeration institutionalizes its own
+// staleness: the next convention arrives and the checker is wrong again until
+// someone edits it. `Widgetfile` passing is the evidence the rule is structural.
+//
+// Deliberately narrower than "extensionless TitleCase", which would also admit
+// `Readme` beside a correct `README.md`. The stem must be an uppercase letter,
+// then lowercase or digits, then a lowercase `file` — so `DockerFile` is still a
+// violation. An optional variant suffix is lowercase-kebab, for `Dockerfile.prod`
+// and `Dockerfile.prod-us`, so `Dockerfile.Prod` is still a violation.
+//
+// The stated cost: `Readmefile` passes. That is the price of a shape rule, and it
+// is recorded rather than hidden behind well-chosen examples.
+const TOOL_ROOT_FILE = /^[A-Z][a-z0-9]*file(\.[a-z0-9]+(-[a-z0-9]+)*)?$/;
+
 export function checkRootFiles(dir) {
   return REQUIRED_ROOT_FILES
     .filter((name) => !existsSync(join(dir, name)))
@@ -34,8 +54,14 @@ export function checkRootFiles(dir) {
 export function checkRootNaming(dir) {
   return readdirSync(dir)
     .filter((name) => !name.startsWith('.') && lstatSync(join(dir, name)).isFile())
-    .filter((name) => !ALLOWED_UPPERCASE_ROOT.includes(name) && !KEBAB.test(name))
-    .map((name) => violation('naming', name, 'root file must be lowercase-kebab or a canonical uppercase file'));
+    .filter((name) => !ALLOWED_UPPERCASE_ROOT.includes(name)
+      && !KEBAB.test(name)
+      && !TOOL_ROOT_FILE.test(name))
+    .map((name) => violation(
+      'naming',
+      name,
+      'root file must be lowercase-kebab, a canonical uppercase file, or an ecosystem *file name',
+    ));
 }
 
 export function checkDocsNaming(dir) {
@@ -101,8 +127,26 @@ export function checkNoUnresolvedPlaceholders(dir) {
       return [
         ...[...text.matchAll(/<!-- profile:[a-z]+ -->/g)]
           .map((m) => violation('placeholders', rel, `unresolved profile marker ${m[0]}`)),
-        ...[...text.matchAll(/<[A-Z][A-Z_]{2,}>/g)]
-          .map((m) => violation('placeholders', rel, `unresolved placeholder ${m[0]}`)),
+        // Standalone only. `<<<UNTRUSTED_SOURCE_TEXT>>>` is a prompt-injection
+        // delimiter marking where untrusted scraped text begins inside an LLM
+        // prompt — measured on one repo, 12 of 19 findings were that pair. The
+        // old rule called them placeholders and the remedy it implied was
+        // "resolve them", i.e. delete a trust boundary in an AI application.
+        //
+        // Both guards are load-bearing and neither is redundant: a fully
+        // symmetric `<<<X>>>` is suppressed by either one alone, so only the
+        // asymmetric `<<X>` and `<X>>` cases prove both are present.
+        //
+        // Not an assignment or quoted-value exemption, which #109 proposed: that
+        // would also exempt a genuine scaffold token in a string or a config,
+        // which is exactly where an unsubstituted one hides.
+        ...[...text.matchAll(/(?<!<)<[A-Z][A-Z_]{2,}>(?!>)/g)]
+          .map((m) => violation(
+            'placeholders',
+            rel,
+            `possible unresolved template placeholder ${m[0]}; `
+            + 'verify it is a scaffold token before replacing it',
+          )),
       ];
     });
 }

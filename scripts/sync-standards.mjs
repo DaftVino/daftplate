@@ -9,18 +9,32 @@
 // Usage:
 //   node scripts/sync-standards.mjs <templates-root> <target> [--dry-run]
 //                                   [--add=<path>]... [--restore=<path>]...
-//                                   [--decline=<path>]...
+//                                   [--decline=<path>]... [--rebaseline=<path>]...
+//                                   [--json] [--diff=<path>]...
+//
+// Exits EXIT_CODES.REFUSED when any path was refused, 0 otherwise (#269).
 import {
-  lstatSync, mkdirSync, mkdtempSync, rmSync, copyFileSync, renameSync, constants,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, copyFileSync, renameSync,
+  readFileSync, writeFileSync, constants,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, basename, sep } from 'node:path';
-import { runCli } from './lib/cli.mjs';
-import { scaffold } from './scaffold.mjs';
+import { join, dirname, basename, sep, resolve } from 'node:path';
+import { canonical } from './lib/fs.mjs';
+import { runCli, EXIT_CODES } from './lib/cli.mjs';
+import { scaffold, MISSING_TOKEN, SCAFFOLD_INPUT_TOKENS } from './scaffold.mjs';
 import {
-  PROVENANCE_FILE, MAX_PROVENANCE_SCHEMA, classify, fileDigest, readProvenance, writeProvenance,
-  unnormalizeProvenance,
+  PROVENANCE_FILE, requiredSchema, classify, rebaselineEntry, fileDigest, digestOf,
+  readProvenance, writeProvenance, serializeProvenance, unnormalizeProvenance,
 } from './lib/provenance.mjs';
+
+// Which report line a --rebaseline produces, per the kind of change it made:
+// [applied, would-apply]. Three kinds and not one, because "your divergent file
+// is daftplate's now" and "the digest was refreshed" are not the same news.
+const REBASELINE_OUTCOMES = {
+  managed: ['REBASELINED', 'WOULD_REBASELINE'],
+  adopted: ['REBASELINED_ADOPTED', 'WOULD_REBASELINE_ADOPTED'],
+  diverged: ['REBASELINED_DIVERGED', 'WOULD_REBASELINE_DIVERGED'],
+};
 
 const STAGING_PREFIX = 'daftplate-sync-';
 
@@ -91,8 +105,12 @@ export function inspectTargetPath(targetRoot, rel) {
 
 // Composed from a base copy plus a profile append, so a plain "MODIFIED" would
 // leave the developer nothing to act on: they cannot tell which lines were ours.
-const appendedNote = ' — this file is composed from a base copy plus a profile append; '
-  + 'the template\'s current version is in the report, add any new lines by hand';
+// It promised more than it delivered: "the template's current version is in the
+// report" was never true -- no report line carries template bytes, and the staging
+// tree that held them is removed in the finally before any caller sees this. The
+// actionable half is the composition, which is what the developer cannot infer.
+const appendedNote = ' — this file is composed from a base copy plus a profile append, '
+  + 'so which lines were daftplate\'s cannot be told from the file; add any new ones by hand';
 
 // An ADDED line built from the ORIGINAL prior (not effectivePrior) carries this
 // suffix when that prior was declined: effectivePrior is what got nulled to let
@@ -124,9 +142,65 @@ function describe(rel, outcome, prior, linkRel, decision) {
     case 'MISSING':
       return `MISSING ${rel} — daftplate wrote this path at scaffold time and it is absent; rerun with --restore=${rel}`;
     case 'MODIFIED':
-      return `REFUSED MODIFIED ${rel} — on-disk digest differs from ${PROVENANCE_FILE}; left untouched${appended}`;
+      // #271 (FORGE-332) AC 2: which part changed. For an appended path the
+      // refusal now means something narrower than it used to — the run has
+      // already checked whether daftplate's own bytes are still there, so
+      // reaching MODIFIED says they are not, and the note stops being an apology
+      // for a question nobody asked.
+      return decision?.part === 'appended-segment'
+        ? `REFUSED MODIFIED ${rel} — the lines daftplate appended are no longer in the file as it wrote `
+          + `them, so its own segment changed rather than the repository's additions; left untouched`
+        : `REFUSED MODIFIED ${rel} — on-disk digest differs from ${PROVENANCE_FILE}; left untouched${appended}`;
+    case 'APPENDED_EXTENDED':
+      // #271 (FORGE-332) AC 1. Not a refusal and not an update: a standing
+      // condition, reported once per run and touched by nothing. The status name
+      // covers a repository extension, and line-ending-normalised containment now
+      // reaches it for a CRLF-only re-save too — so the shared prefix states the
+      // one thing both cases prove, and the tail states which of them this is.
+      //
+      // Two messages rather than one, because `classify()` can tell them apart and
+      // a single message that named both possibilities would take the ordinary
+      // case — a repository adding its own ignore rules — and answer it with a
+      // hedge. Adding to a `.gitignore` daftplate wrote is the expected thing for
+      // a repository to do, and the previous answer, REFUSED MODIFIED
+      // permanently, told an operator their repository had done something wrong by
+      // working normally. Replacing that with a vaguer sentence would have kept
+      // half of the same fault.
+      return decision?.difference === 'line-endings'
+        ? `APPENDED CONTENT INTACT ${rel} — every line daftplate appended is present and the line `
+          + 'endings are the whole difference from the recorded bytes; nothing to do, and nothing here will rewrite them'
+        : `APPENDED CONTENT INTACT ${rel} — the lines daftplate appended are unchanged and this repo has `
+          + 'added its own below them; nothing to do, and nothing here will rewrite them';
+    case 'VANISHED':
+      // Its own outcome because MODIFIED described the wrong event entirely:
+      // there is no on-disk digest to differ, and nothing was left untouched
+      // because there was nothing there. --restore is not a guess -- it is
+      // exactly what the next run will offer for this path.
+      return `REFUSED VANISHED ${rel} — the file was removed after this run classified it and before it was written; nothing was written; rerun with --restore=${rel}`;
+    case 'REBASELINED':
+      // Deliberately not phrased as an update. Nothing about the repository
+      // changed; what changed is what daftplate claims to know about it, and an
+      // operator reading this line needs to see that no file was touched.
+      return `REBASELINED ${rel} — on-disk bytes already equal today's template; ${PROVENANCE_FILE} now records them, and no file was written`;
+    case 'WOULD_REBASELINE':
+      return `WOULD REBASELINE ${rel} — ${PROVENANCE_FILE} would record the bytes already on disk; no file would be written`;
+    // An ownership change gets its own line rather than sharing REBASELINED's:
+    // this is the one that ends a DIVERGED or DECLINED record, and G5 is about
+    // the operator seeing each ownership change happen.
+    case 'REBASELINED_ADOPTED':
+      return `REBASELINED ${rel} — the repository's bytes already equal today's template, so ${PROVENANCE_FILE} now records the path as managed; no file was written`;
+    case 'WOULD_REBASELINE_ADOPTED':
+      return `WOULD REBASELINE ${rel} — would be recorded as managed, its bytes already matching today's template; no file would be written`;
+    case 'REBASELINED_DIVERGED':
+      return `REBASELINED ${rel} — a declined path holding bytes daftplate did not write; ${PROVENANCE_FILE} now records it as diverged against today's template, and no file was written`;
+    case 'WOULD_REBASELINE_DIVERGED':
+      return `WOULD REBASELINE ${rel} — would be recorded as diverged against today's template; no file would be written`;
+    case 'CURRENT_REFRESHED':
+      return `CURRENT ${rel} — bytes unchanged; the template now produces it from a different layer or mode, and ${PROVENANCE_FILE} is refreshed to say so`;
     case 'UNSAFE_LINK':
       return `REFUSED UNSAFE LINK ${rel} — ${linkRel} is a symbolic link or junction; left untouched`;
+    case 'DIRECTORY':
+      return `REFUSED DIRECTORY ${rel} — a directory is at a path the template produces a file for; left untouched`;
     case 'DIVERGED': {
       // Both baselines are named because they answer different questions and
       // need different operator action: repository drift is an edit since
@@ -150,6 +224,10 @@ function describe(rel, outcome, prior, linkRel, decision) {
       return `DECLINED ${rel} — recorded in ${PROVENANCE_FILE}; daftplate will not offer this path again`;
     case 'WOULD_DECLINE':
       return `WOULD DECLINE ${rel} — would be recorded in ${PROVENANCE_FILE} as declined`;
+    case 'WOULD_ADD':
+      return `WOULD ADD ${rel} — would be written and recorded in ${PROVENANCE_FILE} as managed`;
+    case 'WOULD_RESTORE':
+      return `WOULD RESTORE ${rel} — would be written back from the template`;
     case 'RETAINED':
       return `RETAINED ${rel} — ${PROVENANCE_FILE} records this path but daftplate no longer produces it; left untouched`;
     case 'CURRENT':
@@ -189,21 +267,163 @@ function replaceFile(source, destination) {
   }
 }
 
+const ROLLBACK_DIR = '.daftplate-rollback';
+
+/**
+ * Undo the writes this invocation landed, newest first.
+ *
+ * The sync writes files one at a time and records provenance once at the end, so
+ * a throw in between used to leave the target updated while the manifest still
+ * described the old digests — and the *next* run then classified the sync's own
+ * writes as MODIFIED and refused them, which is unrecoverable without hand-editing
+ * the manifest. The failure direction was the bad one.
+ *
+ * Every restore re-proves what it is about to touch, because rollback runs after
+ * an unexpected failure and the tree is exactly the thing that cannot be assumed:
+ *
+ *   - containment is re-walked, so a link that appeared mid-run is refused;
+ *   - the current digest must still be the one THIS invocation wrote. Anything
+ *     else means somebody changed the file after we did, and overwriting that is
+ *     the one outcome worse than leaving the sync half-applied;
+ *   - a created path is removed only as a single leaf `rmSync` with no `recursive`.
+ *     Directories `mkdirSync(recursive)` may have made are deliberately left: they
+ *     are empty and harmless, and proving we created each one is not possible.
+ *
+ * Returns the refusals. Empty means the target is back to its pre-run state.
+ */
+function rollback(targetRoot, journal) {
+  const refusals = [];
+  for (const entry of [...journal].reverse()) {
+    const { rel, kind, backup, writtenDigest } = entry;
+    try {
+      const now = inspectTargetPath(targetRoot, rel);
+      if (!now.ok) {
+        refusals.push(`${rel}: ${now.linkRel} became a link during the run; left as written`);
+        continue;
+      }
+      if (!now.exists) {
+        // Nothing to undo: something else already removed what we wrote.
+        continue;
+      }
+      if (lstatSync(now.abs).isDirectory()) {
+        refusals.push(`${rel}: a directory is now at this path; left as written`);
+        continue;
+      }
+      const nowDigest = fileDigest(now.abs);
+      // Journalling before the write makes one state reachable that the digest
+      // check below reads as sabotage: the entry exists and the write never
+      // landed, so the file still holds its pre-run bytes. Those are the bytes
+      // rollback exists to restore. Undoing nothing is not a weaker answer here,
+      // it is the correct one -- and without this branch a clean, fully
+      // recoverable failure escalates into the retained-staging AggregateError
+      // path, which tells an operator to reconcile a file nobody harmed.
+      if (kind === 'replaced' && backup !== null && nowDigest === fileDigest(backup)) {
+        continue;
+      }
+      if (nowDigest !== writtenDigest) {
+        refusals.push(`${rel}: changed after this sync wrote it; left as found, not overwritten`);
+        continue;
+      }
+      if (kind === 'replaced') replaceFile(backup, now.abs);
+      else rmSync(now.abs, { force: true });
+    } catch (error) {
+      refusals.push(`${rel}: ${error.message}`);
+    }
+  }
+  return refusals;
+}
+
+/** One spelling of a path, for comparing it with another. Folded on win32 because
+ *  the filesystem folds there: `x:` and `X:` name one directory, and a guard that
+ *  disagrees with the filesystem about that is a guard with a way past it. */
+const comparablePath = (path) => {
+  const full = resolve(canonical(path));
+  return process.platform === 'win32' ? full.toLowerCase() : full;
+};
+
+/**
+ * Is `inner` the same path as `outer`, or below it?
+ *
+ * Boundary-aware on purpose. A bare `startsWith` makes `repo-other` look like a
+ * child of `repo`, which would refuse a perfectly legitimate sibling temp root.
+ * Case-folding on win32 does not weaken that: the boundary is still a separator,
+ * so a case-varied sibling stays a sibling.
+ */
+export function isWithin(outer, inner) {
+  const a = comparablePath(outer);
+  const b = comparablePath(inner);
+  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
+}
+
 // Only ever called on a directory this process made with mkdtempSync, under the
-// OS temp root. The guard is here rather than assumed because CLAUDE.md #5 makes
-// "nothing deletes what it did not create" absolute, and a recursive delete is
-// the one operation where being wrong is unrecoverable.
-function removeStaging(staging) {
-  const root = tmpdir();
+// temp root CAPTURED AT CREATION — not tmpdir() read again here. Reading it again
+// lets an environment change between staging and cleanup turn a legitimate removal
+// into a refusal, or worse, validate a path against a root that no longer holds
+// it. The guard is here rather than assumed because CLAUDE.md #5 makes "nothing
+// deletes what it did not create" absolute, and a recursive delete is the one
+// operation where being wrong is unrecoverable.
+function removeStaging(staging, root) {
   if (!staging.startsWith(root + sep) || !staging.includes(STAGING_PREFIX)) {
     throw new Error(`refusing to remove a staging path outside ${root}: ${staging}`);
   }
   rmSync(staging, { recursive: true, force: true });
 }
 
+/**
+ * A unified-ish line diff, or null when the two are identical.
+ *
+ * `#270 (FORGE-331)`. Written here rather than pulled in, because this repository
+ * has no dependencies (CLAUDE.md #4) and the files it runs over are a `.gitignore`
+ * and a handful of markdown documents. A longest-common-subsequence table over
+ * lines is quadratic and entirely adequate at that size; it is capped anyway, and
+ * the cap reports itself rather than silently truncating.
+ *
+ * Exported for its test, and for the reason `#294 (FORGE-345)` exported
+ * `LOAD_FAILURE`: a formatter whose output an operator relies on should be
+ * assertable without capturing a whole run's stdout.
+ */
+export const DIFF_LINE_CAP = 4000;
+
+export function unifiedDiff(before, after) {
+  if (before === after) return null;
+  const a = before.split(/\r?\n/);
+  const b = after.split(/\r?\n/);
+  // Line endings are not a difference an operator can act on, and reporting one
+  // would show every line of a CRLF checkout as changed — burying the line that
+  // actually did. The split already normalises them; this is what makes the
+  // normalisation reach the answer rather than only the display.
+  if (a.length === b.length && a.every((line, i) => line === b[i])) return null;
+  if (a.length + b.length > DIFF_LINE_CAP) {
+    return `  (diff not shown: ${a.length} + ${b.length} lines exceeds the ${DIFF_LINE_CAP}-line cap)`;
+  }
+
+  // LCS lengths, then walk back. Two rolling rows would halve the memory and
+  // cost the backtrack, which is the half that produces the output.
+  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      table[i][j] = a[i] === b[j]
+        ? table[i + 1][j + 1] + 1
+        : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+
+  const lines = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { lines.push(`   ${a[i]}`); i += 1; j += 1; } else if (table[i + 1][j] >= table[i][j + 1]) {
+      lines.push(`  -${a[i]}`); i += 1;
+    } else { lines.push(`  +${b[j]}`); j += 1; }
+  }
+  while (i < a.length) { lines.push(`  -${a[i]}`); i += 1; }
+  while (j < b.length) { lines.push(`  +${b[j]}`); j += 1; }
+  return lines.join('\n');
+}
+
 export function syncStandards(templatesRoot, targetRoot, opts = {}) {
   const {
-    dryRun = false, add = [], restore = [], decline = [], hooks = {},
+    dryRun = false, add = [], restore = [], decline = [], rebaseline = [], diff = [], hooks = {},
   } = opts;
 
   const initialProvenance = inspectTargetPath(targetRoot, PROVENANCE_FILE);
@@ -281,13 +501,43 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
     );
   }
 
+  // Same rule for --rebaseline against each of the other three. The other
+  // selectors settle a path by writing it or by recording a refusal to; this one
+  // settles it by recording what is already there. Both at once is two different
+  // answers to one question, and the pair a real operator reaches for by
+  // accident is --add with --rebaseline on a declined path, where each on its
+  // own is a sensible thing to want.
+  for (const [flag, selectors] of [['--add', add], ['--restore', restore], ['--decline', decline]]) {
+    const both = rebaseline.find((rel) => selectors.includes(rel));
+    if (both) {
+      throw new Error(
+        `refusing to sync: --rebaseline and ${flag} cannot both name ${both}; `
+        + 'that is a contradiction, not a selection',
+      );
+    }
+  }
+
   // Compose what the template would produce today by running the real scaffold.
   // Reimplementing its four steps would drift, and drift here means every
   // scaffolded CLAUDE.md reads as MODIFIED forever. Two side effects on the
   // staging tree are deliberately ignored: scaffold writes a .daftplate.json
   // into it (never read — the target's manifest is already loaded) and runs
   // verifyRepo over it (meaningless for a throwaway composition).
-  const staging = mkdtempSync(join(tmpdir(), STAGING_PREFIX));
+  // Captured once, before staging exists, and used for both creation and the
+  // cleanup guard. The design claimed staging under the OS temp root made it
+  // "impossible to accidentally commit a staging tree into a user's repo"; that
+  // held only while tmpdir() was outside the repo, which is one environment
+  // variable away from being false. TMPDIR=<target> put a full scaffold —
+  // second .daftplate.json included — inside the user's repository, and killing
+  // the process before the finally left it there.
+  const tempRoot = resolve(tmpdir());
+  if (isWithin(targetRoot, tempRoot)) {
+    throw new Error(
+      `refusing to sync: the OS temp root is inside the target (${tempRoot}); `
+      + 'staging would be written into the repository being synchronized',
+    );
+  }
+  const staging = mkdtempSync(join(tempRoot, STAGING_PREFIX));
   const result = {
     staging,
     reports: [],
@@ -299,17 +549,55 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
     retained: [],
     diverged: [],
     declined: [],
+    // #271 (FORGE-332): appended paths whose daftplate segment is intact and whose
+    // repository has added its own lines below it. Reported, never written.
+    extended: [],
+    rebaselined: [],
     wouldUpdate: [],
+    wouldAdd: [],
+    wouldRestore: [],
+    wouldRebaseline: [],
     versionAdvanced: false,
   };
 
+  // Declared outside the try so the catch can undo what the try landed. See
+  // rollback() for what "undo" is allowed to mean here.
+  const journal = [];
+  let rollbackRefusals = null;
+
   try {
-    const { tokens = {} } = manifest;
-    const { PROJECT_NAME, PROJECT_SUMMARY } = tokens;
-    const composed = scaffold(templatesRoot, manifest.profile, staging, {
-      year: tokens.YEAR,
-      tokens: { PROJECT_NAME, PROJECT_SUMMARY },
-    });
+    // Declared from the contract, never destructured by hand. The two names this
+    // used to pull out came back as own properties holding `undefined` whenever
+    // the manifest predated the tokens gate -- indistinguishable, at the
+    // substitution site, from values somebody meant -- and a fourth required token
+    // added to scaffold.mjs would have been silently omitted here instead of
+    // declared missing. The `= {}` default it also carried was dead:
+    // validateProvenance() already supplies one.
+    const { YEAR, ...tokens } = Object.fromEntries(
+      SCAFFOLD_INPUT_TOKENS.map((name) => [name, manifest.tokens[name]]),
+    );
+    let composed;
+    try {
+      composed = scaffold(templatesRoot, manifest.profile, staging, {
+        year: YEAR,
+        tokens,
+      });
+    } catch (error) {
+      // Two layers, one detector. fillPlaceholders knows the token and the file;
+      // only sync knows which manifest declared nothing and what an operator does
+      // about it. Anything else propagates untouched.
+      if (error.code !== MISSING_TOKEN) throw error;
+      throw new Error(
+        `refusing to sync: ${join(targetRoot, PROVENANCE_FILE)} declares no value `
+        + `for <${error.token}>, which the template substitutes into ${error.rel}. `
+        + 'A manifest predating the tokens gate composes every input from nothing, '
+        + 'and writing that composition puts the literal string "undefined" into '
+        + 'each token-bearing file. Give the manifest a "tokens" object naming '
+        + `${SCAFFOLD_INPUT_TOKENS.join(', ')} with the values this repo was `
+        + 'scaffolded from, then re-run — skills/sync-standards/SKILL.md carries '
+        + 'the recovery note, including what to do if a sync already ran.',
+      );
+    }
     const candidates = composed.provenance.files;
 
     // Preflight B: every manifest-only way a --decline selector can be wrong
@@ -337,11 +625,115 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
       );
     }
 
+    // Preflight C: --add and --restore were consulted in exactly one place, an
+    // `includes(rel)` inside the write loop, so a path that never reached that
+    // line was never looked at. A typo, a stale path, or a path in the wrong
+    // ownership class did nothing and appeared nowhere — the operator read
+    // `outstanding 0` and believed the file was adopted.
+    //
+    // The predicate is NOT --decline's "the template produces this path". That
+    // one accepts README.md, which the template certainly produces and --add
+    // certainly cannot adopt. It is "this path was OFFERED this run", which is
+    // only knowable after classification — so the named paths are classified
+    // here, asking classify() the same question the loop asks, D2's declined
+    // lift included. Drop that lift and --add stops lifting a decline, which is
+    // a shipped feature.
+    //
+    // A handful of paths are inspected twice. The alternative is a full
+    // two-pass classify-then-write refactor of the most safety-critical loop in
+    // the repository, which buys nothing this does not.
+    //
+    // Refusing the whole run over one bad selector follows --decline and G1: an
+    // operator who names five paths and mistypes one wants to know before the
+    // other four are written.
+    //
+    // Extracted so --rebaseline's ladder below asks the same three questions of
+    // the same path in the same order, rather than becoming a fourth validation
+    // shape that could drift from this one.
+    const measureSelected = (selector, rel) => {
+      const candidate = candidates[rel] ?? null;
+      if (!candidate) {
+        throw new Error(
+          `refusing to sync: ${selector} cannot name ${rel}; `
+          + 'daftplate does not produce this path today',
+        );
+      }
+      const inspected = inspectTargetPath(targetRoot, rel);
+      // An unsafe link, a directory, a COLLISION, a standing decline: every one
+      // of these already reaches the operator as its own report line, with its
+      // status, counted in `outstanding`. Refusing the run for them would trade
+      // a complete report for an early exit and would break four shipped
+      // behaviours. Only SILENCE is the defect here.
+      if (!inspected.ok) return null;
+      if (inspected.exists && lstatSync(inspected.abs).isDirectory()) return null;
+      return {
+        candidate,
+        prior: priorFiles[rel] ?? null,
+        actual: inspected.exists ? fileDigest(inspected.abs) : null,
+      };
+    };
+
+    for (const [selector, expected, named] of [['--add', 'OFFER_ADD', add], ['--restore', 'OFFER_RESTORE', restore]]) {
+      for (const rel of named) {
+        const measured = measureSelected(selector, rel);
+        if (!measured) continue;
+        const { candidate, prior, actual } = measured;
+        const { status, disposition } = classify(prior, candidate, actual);
+        // No D2 lift here, deliberately. A declined prior named by --add would
+        // classify DECLINED / REPORT_ONLY without it and NEW / OFFER_ADD with it,
+        // and both are permitted below — so applying the lift cannot change this
+        // gate's answer. It was written in and then removed, because the mutant
+        // that dropped it killed nothing: dead code that looks load-bearing is
+        // worse than no code. The loop still applies the lift, which is where the
+        // decline is actually lifted and where its tests point.
+        if (disposition === expected || disposition === 'REFUSE' || disposition === 'REPORT_ONLY') {
+          continue;
+        }
+        throw new Error(
+          `refusing to sync: ${selector} cannot name ${rel}; `
+          + `it classifies ${status} this run, not an offer to take up`,
+        );
+      }
+    }
+
+    // Preflight D: --rebaseline (D11). Every other selector asks "was this path
+    // offered this run"; this one asks whether what the manifest would come to
+    // say is ALREADY true on disk. The act is a measurement, and a measurement
+    // that needs a write to become true is not one — so every refusal
+    // rebaselineEntry() can return is a way the truth could not be recorded
+    // without writing repository bytes.
+    //
+    // The decision itself is pure and lives beside classify(), which is what
+    // lets the write loop below re-derive it from its own digest read rather
+    // than trusting this one across the window between them.
+    for (const rel of rebaseline) {
+      const measured = measureSelected('--rebaseline', rel);
+      if (!measured) continue;
+      const { refusal } = rebaselineEntry(rel, measured.prior, measured.candidate, measured.actual);
+      if (refusal) throw new Error(`refusing to sync: ${refusal}`);
+    }
+
+    // The manifest is rollback material too: restoring the files while leaving a
+    // rewritten .daftplate.json behind would leave the repo describing a state it
+    // is no longer in, which is the same class of damage as the half-applied sync.
+    const manifestPath = join(targetRoot, PROVENANCE_FILE);
+    const manifestBefore = existsSync(manifestPath) ? readFileSync(manifestPath) : null;
+
     const paths = [...new Set([...Object.keys(priorFiles), ...Object.keys(candidates)])].sort();
     const nextFiles = { ...priorFiles };
     let unresolved = 0;
     let wrote = false;
     let manifestChanged = false;
+
+    // A divergent or declined path never reaches a write site, so it can never
+    // enter the journal — which keeps report-only entries out of the rollback
+    // plan by construction rather than by a filter that could be forgotten.
+    const backupInto = (rel, abs) => {
+      const backup = join(staging, ROLLBACK_DIR, rel);
+      mkdirSync(dirname(backup), { recursive: true });
+      copyFileSync(abs, backup);
+      return backup;
+    };
 
     for (const rel of paths) {
       const prior = priorFiles[rel] ?? null;
@@ -373,6 +765,33 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
         continue;
       }
       const { abs } = inspected;
+
+      // After link inspection, before any fileDigest(). The driver used to hash
+      // every existing candidate path before knowing whether daftplate owned it,
+      // so a directory sitting at a path the template produces threw EISDIR out
+      // of the loop — no COLLISION line, and every path sorted after it never
+      // classified at all. One unowned directory cost the operator the entire
+      // report.
+      //
+      // It applies to a newly produced path and to a recorded managed one alike:
+      // --restore naming a path that now holds a directory must refuse, not
+      // write over it. Deliberately not a classify() state — classify() decides
+      // what may be done to a FILE from three digests, and a directory is a
+      // shape question answered before any digest exists. It is also kept out of
+      // divergent drift, which compares baselines this path has none of.
+      if (inspected.exists && lstatSync(abs).isDirectory()) {
+        result.refused.push({ rel, status: 'DIRECTORY' });
+        result.reports.push({
+          rel,
+          status: 'DIRECTORY',
+          disposition: 'REFUSE',
+          outcome: 'DIRECTORY',
+          message: describe(rel, 'DIRECTORY', prior),
+        });
+        unresolved += 1;
+        continue;
+      }
+
       const actual = inspected.exists ? fileDigest(abs) : null;
       // D2's lift: a declined prior named by --add re-classifies against a
       // null prior, so every existing gate applies as if the path had never
@@ -380,8 +799,91 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
       // building below — describe() needs the real history to say a decline
       // was lifted, which effectivePrior has deliberately forgotten.
       const effectivePrior = (prior?.ownership === 'declined' && add.includes(rel)) ? null : prior;
-      const decision = classify(effectivePrior, candidate, actual);
+      // #270 (FORGE-331). The bytes the template WOULD have written are in
+      // staging right now and are deleted in the `finally` below, so an operator
+      // reading a REFUSED row afterwards has nothing to compare against. The
+      // answer is to compute the comparison HERE, while the bytes exist, rather
+      // than to keep them: nothing then outlives the run, which is AC 4 met by
+      // construction instead of by a cleanup that has to be trusted.
+      //
+      // Opt-in per path, not per run. A whole-run flag would put every managed
+      // file's contents into a report — and into whatever CI log collects it —
+      // to answer a question about one of them.
+      //
+      // Not gated on the disposition. A `disposition === 'REFUSE'` guard was
+      // written here first and turned out to be almost inert: by the time an
+      // UPDATE row is reported the file has been written, so the two texts are
+      // equal and `unifiedDiff` returns null anyway. The mutant removing that
+      // guard killed nothing, which is the shape #294 (FORGE-345) settled — a
+      // condition no test can distinguish is decoration. Content decides instead,
+      // which also makes `--dry-run --diff=<path>` show what an update WOULD do,
+      // the one case the guard actively suppressed.
+      const wantsDiff = diff.includes(rel);
+      const diffFor = () => {
+        if (!wantsDiff || !inspected.exists) return {};
+        const stagedAt = join(staging, ...rel.split('/'));
+        if (!existsSync(stagedAt)) return {};
+        const text = unifiedDiff(readFileSync(abs, 'utf8'), readFileSync(stagedAt, 'utf8'));
+        return text === null ? {} : { diff: text };
+      };
+      // #271 (FORGE-332): the appended branch answers from the text, so the text
+      // is measured here — where every other filesystem call already lives —
+      // and handed to a classify() that stays pure. Read only for an appended
+      // prior, so no other path pays for it, and the staged candidate is the
+      // composition this run just produced rather than anything remembered.
+      const texts = effectivePrior?.mode === 'appended' && inspected.exists
+        ? {
+          candidate: readFileSync(join(staging, ...rel.split('/')), 'utf8'),
+          actual: readFileSync(abs, 'utf8'),
+        }
+        : null;
+      const decision = classify(effectivePrior, candidate, actual, texts);
       const { status, disposition } = decision;
+
+      // --rebaseline is intercepted before every branch below, because the two
+      // dispositions it takes over are the two an ordinary run has NO exit from:
+      // REFUSE (MODIFIED, OVERRIDDEN) and REPORT_ONLY (DIVERGED, DECLINED).
+      // Left alone, the first pushes the path into result.refused and holds the
+      // version back on the very thing the operator just resolved, and the
+      // second reports a standing condition forever. Nothing with an exit of its
+      // own — CURRENT, UPDATE, an offer — is touched, which is also why a path
+      // whose manifest entry is already accurate simply reports CURRENT.
+      //
+      // The decision is RE-DERIVED here from this loop's digest read rather than
+      // carried down from the preflight. That read happens after composition and
+      // after the earlier paths in this run, and a file edited in that window
+      // changes the answer; recording the preflight's answer over it would be
+      // exactly the silent adoption the convergence rule exists to prevent. A
+      // refusal at this point does not throw — earlier writes have landed, and
+      // an exception here would be the partial sync G1 forbids. The path falls
+      // through to its ordinary reported outcome instead: MODIFIED, DIVERGED,
+      // whatever it now is. Reported, never silent, and nothing written.
+      //
+      // It writes no repository byte, so it joins no journal: there is nothing
+      // to undo, and rollback restoring the manifest restores the truth with it.
+      const rebaselining = rebaseline.includes(rel)
+        && (disposition === 'REFUSE' || disposition === 'REPORT_ONLY')
+        ? rebaselineEntry(rel, prior, candidate, actual)
+        : null;
+      if (rebaselining?.entry) {
+        const [applied, wouldApply] = REBASELINE_OUTCOMES[rebaselining.kind];
+        const rebaselineOutcome = dryRun ? wouldApply : applied;
+        if (dryRun) {
+          result.wouldRebaseline.push(rel);
+        } else {
+          nextFiles[rel] = rebaselining.entry;
+          manifestChanged = true;
+          result.rebaselined.push(rel);
+        }
+        result.reports.push({
+          rel,
+          status,
+          disposition,
+          outcome: rebaselineOutcome,
+          message: describe(rel, rebaselineOutcome, prior),
+        });
+        continue;
+      }
 
       // REPORT_ONLY is its own terminus, and an explicit one rather than a path
       // that happens to match no branch below. Divergence and a standing decline
@@ -400,6 +902,20 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
         // and never has to subtract either back out of refused or offered.
         // DIVERGED and DECLINED share one disposition but need different
         // operator action (D6), which is why they do not share one bucket.
+        // #271 (FORGE-332). A third status reaches this terminus now, and it
+        // gets its own bucket for the reason DIVERGED and DECLINED have two: a
+        // caller must never have to infer which condition it is by searching
+        // formatted messages. It carries no templateDrift and no repoState —
+        // those are questions about a baseline this status does not have — so it
+        // is intercepted before the drift object is built rather than given
+        // undefined fields to keep a shape it does not share.
+        if (status === 'APPENDED_EXTENDED') {
+          result.extended.push({ rel });
+          result.reports.push({
+            rel, status, disposition, outcome: status, message: describe(rel, status, prior, undefined, decision),
+          });
+          continue;
+        }
         const drift = { rel, templateDrift: decision.templateDrift };
         if (status === 'DIVERGED') {
           result.diverged.push({ ...drift, repoDrift: decision.repoDrift });
@@ -452,7 +968,7 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
           });
         }
         result.reports.push({
-          rel, status, disposition, outcome, message: describe(rel, outcome, prior),
+          rel, status, disposition, outcome, message: describe(rel, outcome, prior, undefined, decision),
         });
         continue;
       }
@@ -477,20 +993,51 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
         // this one just proved. The window that matters is the one beforeWrite
         // opens, and it is closed above.
         if (rechecked.exists && fileDigest(rechecked.abs) === prior.digest) {
+          const backup = backupInto(rel, rechecked.abs);
           replaceFile(source, rechecked.abs);
+          journal.push({
+            rel, kind: 'replaced', backup, writtenDigest: candidate.digest,
+          });
           result.updated.push(rel);
           outcome = 'UPDATE';
           acted = true;
           wrote = true;
         } else {
-          result.refused.push({ rel, status: 'MODIFIED' });
-          result.reports.push({ rel, status: 'MODIFIED', disposition: 'REFUSE', outcome: 'MODIFIED', message: describe(rel, 'MODIFIED', prior) });
+          // Two different events shared this branch and reported as one. A file
+          // that is GONE has no on-disk digest to differ from anything.
+          const reported = rechecked.exists ? 'MODIFIED' : 'VANISHED';
+          result.refused.push({ rel, status: reported });
+          result.reports.push({
+            rel,
+            status: reported,
+            disposition: 'REFUSE',
+            outcome: reported,
+            // #270 (FORGE-331): the diff, when the operator named this path.
+            ...diffFor(),
+            // #271 (FORGE-332): the decision carries which part of an appended file
+            // changed, and a refusal that does not pass it says less than it knows.
+            message: describe(rel, reported, prior, undefined, decision),
+          });
           unresolved += 1;
           continue;
         }
       } else if (disposition === 'UPDATE') {
         result.wouldUpdate.push(rel);
         outcome = 'WOULD_UPDATE';
+      } else if ((disposition === 'OFFER_ADD' || disposition === 'OFFER_RESTORE') && wanted && dryRun) {
+        // The symmetry --decline already had. `wanted && !dryRun` sent a taken-up
+        // offer to the offered bucket, where it printed "rerun with --add=X" —
+        // the flag that had just been passed — and counted toward `outstanding`.
+        // It does not count, for WOULD_DECLINE's reason: the operator has
+        // decided, and the real run will leave nothing outstanding. A dry run
+        // then reports the counts the real run produces, which is the point.
+        if (disposition === 'OFFER_ADD') {
+          result.wouldAdd.push(rel);
+          outcome = 'WOULD_ADD';
+        } else {
+          result.wouldRestore.push(rel);
+          outcome = 'WOULD_RESTORE';
+        }
       } else if ((disposition === 'OFFER_ADD' || disposition === 'OFFER_RESTORE') && wanted && !dryRun) {
         const beforeMkdir = inspectTargetPath(targetRoot, rel);
         if (!beforeMkdir.ok) {
@@ -514,6 +1061,9 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
         // discard the exclusivity that stops a file appearing mid-run from being
         // silently overwritten, which is a guarantee replaceFile cannot offer.
         copyFileSync(source, afterMkdir.abs, constants.COPYFILE_EXCL);
+        journal.push({
+          rel, kind: 'created', backup: null, writtenDigest: candidate.digest,
+        });
         (disposition === 'OFFER_ADD' ? result.added : result.restored).push(rel);
         outcome = disposition === 'OFFER_ADD' ? 'ADDED' : 'RESTORED';
         acted = true;
@@ -526,8 +1076,32 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
         unresolved += 1;
       }
 
+      // A CURRENT path never acts, so its entry used to be carried forward
+      // verbatim -- including a `layer` and `mode` the template has since moved
+      // away from. That is not only a stale line in a file: classify()'s
+      // OVERRIDDEN gate reads prior.mode, so a byte-identical file can carry a
+      // wrong input into a later refusal.
+      //
+      // Metadata only. The bytes did not move, so the digest may not; ownership
+      // is the repository's answer, not this run's. Reached only through
+      // disposition NONE, which classify() gives to managed entries alone --
+      // diverged and declined return REPORT_ONLY from gates that sit above it, so
+      // this cannot touch a baseline G2 protects.
+      if (!acted && disposition === 'NONE'
+          && (prior.layer !== candidate.layer || prior.mode !== candidate.mode)) {
+        nextFiles[rel] = { ...prior, layer: candidate.layer, mode: candidate.mode };
+        manifestChanged = true;
+        outcome = 'CURRENT_REFRESHED';
+      }
       if (acted) nextFiles[rel] = candidate;
-      result.reports.push({ rel, status, disposition, outcome, message: describe(rel, outcome, prior) });
+      result.reports.push({
+        rel,
+        status,
+        disposition,
+        outcome,
+        ...diffFor(),
+        message: describe(rel, outcome, prior, undefined, decision),
+      });
     }
 
     // Only paths actually written change provenance. A refused path keeps its
@@ -546,27 +1120,52 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
     // Re-declining an already-declined path leaves manifestChanged false (it
     // took the REPORT_ONLY branch above, not the recording branch), so a
     // no-op run stays a no-op and does not rewrite the manifest.
-    if (!dryRun && (wrote || manifestChanged || result.versionAdvanced)) {
+    // Three separate facts, and #72's third gap was letting one of them stand in
+    // for another. `wrote` is "file bytes changed"; `manifestChanged` is
+    // "provenance entries changed"; `versionAdvanced` is "the sync resolved
+    // everything, so the version is ENTITLED to advance" — which is true on every
+    // clean run, including one where the recorded version already equals the
+    // template's. Using it directly as the write condition therefore truncated and
+    // rewrote a byte-identical .daftplate.json on every fully current sync:
+    // harmless on an ordinary filesystem, and an exception on a read-only manifest,
+    // where a no-op run threw instead of reporting that everything was current.
+    //
+    // The write needs the narrower fact — did the version actually MOVE — while
+    // the summary line and the entitlement semantics keep the broader one.
+    const versionMoved = result.versionAdvanced
+      && manifest.daftplate !== composed.provenance.daftplate;
+    if (!dryRun && (wrote || manifestChanged || versionMoved)) {
       const provenance = inspectTargetPath(targetRoot, PROVENANCE_FILE);
       if (!provenance.ok) {
         throw new Error(`refusing to sync: unsafe link in target path: ${PROVENANCE_FILE}`);
       }
       // Bumping schema here — not touching the `...manifest` spread or the
       // `daftplate:` line — is #123's fix, not #125's, and the two stay
-      // separable because it fires on a different condition than either of
-      // those lines: only when manifestChanged, i.e. only when a decline was
-      // just recorded. #125 is a run that changes nothing; this branch is
-      // never reached by one. A schema 1 or 2 manifest cannot legally carry
-      // `ownership: 'declined'` (Phase 1 gated it to schema >= 3), so writing
-      // one without bumping bricks the very manifest this run just wrote —
-      // the next sync throws "unknown ownership" before it can do anything.
-      // Bumping is safe because every entry in nextFiles already passed
-      // through validateProvenance(), so each already carries an explicit
-      // ownership, which is exactly what schema 3 requires. It is also the
-      // sanctioned migration per docs/architecture.md: the schema number
-      // "advances only when something writes a manifest anyway, never as an
-      // upgrade pass over repos that are working" — recording a decline is
-      // something writing the manifest anyway.
+      // separable because it asks a different question than either of those
+      // lines. #125 is a run that changes nothing; this branch is never reached
+      // by one.
+      //
+      // The question is what the ENTRIES need, not that a write happened —
+      // #242 (FORGE-316). It used to be `manifestChanged ? MAX : manifest.schema`,
+      // on the belief that manifestChanged meant "a decline was just recorded".
+      // That stopped being true at #237: a CURRENT metadata refresh sets it, and
+      // so does every `--rebaseline` row, and neither needs anything schema 1
+      // cannot express. So an operator who re-baselined one path in a schema 1
+      // repository got a manifest a daftplate 1.6.0 checkout refuses outright —
+      // the schema refusal firing for a migration nobody requested.
+      //
+      // Recording a decline still bumps, which is the case the old condition was
+      // written for: a schema 1 or 2 manifest cannot legally carry
+      // `ownership: 'declined'` (Phase 1 gated it to schema >= 3), so writing one
+      // without bumping bricks the manifest this run just wrote — the next sync
+      // throws "unknown ownership" before it can do anything. requiredSchema()
+      // says so from the entry rather than from the occasion.
+      //
+      // Math.max, because the number never runs backwards: a schema 3 manifest
+      // whose last decline is lifted needs only 1, and writing 1 would hand an
+      // older checkout a manifest this daftplate had already migrated. Bumping is
+      // safe because every entry in nextFiles carries an explicit ownership,
+      // which is what schema 2 and 3 require.
       // `manifest` is what readProvenance() returned, which is a NORMALIZED copy
       // (#125): schema 1's implicit ownership is explicit in it, a schema key was
       // supplied where the file had none, and an absent tokens map became {}.
@@ -574,15 +1173,63 @@ export function syncStandards(templatesRoot, targetRoot, opts = {}) {
       // to declare schema 1 while carrying schema 2's shape. unnormalizeProvenance()
       // is the inverse, applied here rather than inside writeProvenance() because
       // only a writer that first read a manifest can round-trip one.
-      writeProvenance(targetRoot, unnormalizeProvenance({
+      const nextManifest = unnormalizeProvenance({
         ...manifest,
-        schema: manifestChanged ? MAX_PROVENANCE_SCHEMA : manifest.schema,
+        schema: Math.max(manifest.schema, requiredSchema(nextFiles)),
         daftplate: result.versionAdvanced ? composed.provenance.daftplate : manifest.daftplate,
         files: nextFiles,
-      }));
+      });
+
+      // Journalled BEFORE the write, and still last in the journal so it is undone
+      // first. The old ordering pushed after, above a comment claiming a
+      // post-provenance failure would restore the prior manifest — but the backup
+      // copy, its mkdirSync and the fileDigest all sat between the write and the
+      // push, and each of them throws into exactly the state the comment said was
+      // prevented: files restored, new provenance left beside them.
+      //
+      // The backup is the bytes captured before any write, never a copy taken from
+      // disk here. Reading the path now would back up whatever is at it, which
+      // after the write is the new manifest, restoring nothing.
+      //
+      // writtenDigest comes from the serialized string rather than from the file,
+      // because there is no file yet — that is the whole point of the reordering.
+      let manifestBackup = null;
+      if (manifestBefore !== null) {
+        manifestBackup = join(staging, ROLLBACK_DIR, PROVENANCE_FILE);
+        mkdirSync(dirname(manifestBackup), { recursive: true });
+        writeFileSync(manifestBackup, manifestBefore);
+      }
+      journal.push({
+        rel: PROVENANCE_FILE,
+        kind: manifestBefore === null ? 'created' : 'replaced',
+        backup: manifestBackup,
+        writtenDigest: digestOf(serializeProvenance(nextManifest)),
+      });
+      writeProvenance(targetRoot, nextManifest, { rename: hooks.renameProvenance });
+      hooks.afterProvenance?.(targetRoot);
     }
+  } catch (error) {
+    rollbackRefusals = rollback(targetRoot, journal);
+    if (rollbackRefusals.length) {
+      // Staging is retained and named: it holds the only copies of the bytes that
+      // could not be restored. Nothing further is overwritten or deleted, because
+      // every refusal above means the tree stopped matching what we wrote, and
+      // guessing past that is how a recovery tool destroys the thing it came for.
+      throw new AggregateError(
+        [error, ...rollbackRefusals.map((r) => new Error(r))],
+        [
+          `sync failed and could not be fully rolled back: ${error.message}`,
+          ...rollbackRefusals.map((r) => `  ${r}`),
+          `  recovery material retained at ${staging}`,
+          '  no further overwrite or deletion was attempted',
+        ].join('\n'),
+      );
+    }
+    throw error;
   } finally {
-    removeStaging(staging);
+    // Retained only when rollback could not finish — then it is evidence, not
+    // debris, and the message above names it.
+    if (!rollbackRefusals?.length) removeStaging(staging, tempRoot);
   }
 
   return result;
@@ -608,11 +1255,16 @@ export function formatSyncSummary(result, dryRun) {
   const drifted = diverged.filter(({ templateDrift }) => templateDrift === 'CHANGED').length;
   const declined = result.declined ?? [];
   const declinedDrifted = declined.filter(({ templateDrift }) => templateDrift === 'CHANGED').length;
+  // Conditional for diverged's reason rather than added's: re-baselining is a
+  // named act on a named path, so a permanent "re-baselined 0" would train the
+  // eye past the one term that means an ownership baseline moved.
+  const rebaselined = (dryRun ? result.wouldRebaseline : result.rebaselined) ?? [];
 
   return [
     `${dryRun ? 'would update' : 'updated'} ${dryRun ? result.wouldUpdate.length : result.updated.length}`,
-    `added ${result.added.length}`,
-    `restored ${result.restored.length}`,
+    `added ${dryRun ? (result.wouldAdd ?? []).length : result.added.length}`,
+    `restored ${dryRun ? (result.wouldRestore ?? []).length : result.restored.length}`,
+    ...(rebaselined.length ? [`${dryRun ? 'would re-baseline' : 're-baselined'} ${rebaselined.length}`] : []),
     `retained ${result.retained.length}`,
     ...(diverged.length ? [`diverged ${diverged.length} (${drifted} with template drift)`] : []),
     // Same rule as diverged, same reason: a permanent "declined 0" would train
@@ -642,8 +1294,15 @@ function main(argv) {
     console.error('there is no --decline-all: naming each path is what makes declining it a decision');
     return 2;
   }
+  // G5 again, and the reason is if anything stronger here: a re-baseline moves
+  // what daftplate claims to have authored, on a path whose bytes it did not
+  // write. Naming each one is the whole of the operator's consent.
+  if (args.includes('--rebaseline-all')) {
+    console.error('there is no --rebaseline-all: naming each path is what makes re-baselining it a decision');
+    return 2;
+  }
   if (!templatesRoot || !target) {
-    console.error('usage: node scripts/sync-standards.mjs <templates-root> <target> [--dry-run] [--add=<path>]... [--restore=<path>]... [--decline=<path>]...');
+    console.error('usage: node scripts/sync-standards.mjs <templates-root> <target> [--dry-run] [--add=<path>]... [--restore=<path>]... [--decline=<path>]... [--rebaseline=<path>]... [--json] [--diff=<path>]...');
     return 2;
   }
 
@@ -651,21 +1310,67 @@ function main(argv) {
   let result;
   try {
     result = syncStandards(templatesRoot, target, {
-      dryRun, add: flags('add'), restore: flags('restore'), decline: flags('decline'),
+      dryRun,
+      add: flags('add'),
+      restore: flags('restore'),
+      decline: flags('decline'),
+      rebaseline: flags('rebaseline'),
+      diff: flags('diff'),
     });
   } catch (error) {
     console.error(error.message);
     return 1;
   }
 
-  for (const { message } of result.reports) console.log(message);
   const outstanding = result.refused.length + result.offered.length;
-  console.log(formatSyncSummary(result, dryRun));
-  if (dryRun) console.error('dry run: nothing was written');
-  else if (!result.versionAdvanced && outstanding) {
-    console.error(`${outstanding} path(s) outstanding — ${PROVENANCE_FILE} still records the old daftplate version`);
+
+  // #269 (FORGE-330) half 2. Prose on stdout was this command's only machine
+  // surface, so a batch driver had to parse English to learn what happened. The
+  // rows are the SAME rows — `result.reports` is what the prose is rendered from,
+  // and the JSON carries each row's `message` alongside its fields so the two
+  // cannot describe different runs. A test asserts the row sets agree.
+  if (args.includes('--json')) {
+    console.log(JSON.stringify({
+      dryRun,
+      outstanding,
+      versionAdvanced: result.versionAdvanced ?? false,
+      summary: formatSyncSummary(result, dryRun),
+      reports: result.reports,
+    }, null, 2));
+  } else {
+    for (const { message, diff } of result.reports) {
+      console.log(message);
+      // #270 (FORGE-331): printed under the row it belongs to, and only for a
+      // path the operator named. The staging tree is already gone by the time
+      // this prints — the comparison was made while it existed, which is why
+      // nothing had to be retained for it. The --json branch above needs no
+      // equivalent: the diff is a field on the row it already emits.
+      if (diff) console.log(diff);
+    }
+    console.log(formatSyncSummary(result, dryRun));
+    if (dryRun) console.error('dry run: nothing was written');
+    else if (!result.versionAdvanced && outstanding) {
+      console.error(`${outstanding} path(s) outstanding — ${PROVENANCE_FILE} still records the old daftplate version`);
+    }
   }
-  return 0;
+
+  // #269 (FORGE-330) half 1. A run that refused a path exited 0, indistinguishable
+  // from a clean one to any caller — which is what blocks a fleet-wide batch
+  // driver, since the only way to learn a path was left untouched was to read the
+  // prose.
+  //
+  // **Refusals only, not `outstanding`.** An OFFER is not a refusal: NEW and
+  // MISSING are the command telling an operator it found work it may not do
+  // unasked, and a first sync against a repository that has drifted legitimately
+  // reports several. Exiting non-zero for those would make the normal case look
+  // like a failure, and a caller that learned to ignore the code would learn to
+  // ignore it for refusals too. `outstanding` still holds the version back and
+  // still prints; it is the exit code alone that is narrower.
+  //
+  // `EXIT_CODES.REFUSED` rather than a private number, and rather than `1`:
+  // `1` is what the catch above returns for a sync that could not run at all, and
+  // "I ran and declined to touch three paths" is a different fact from "I threw".
+  return result.refused.length ? EXIT_CODES.REFUSED : 0;
 }
 
 export { main };

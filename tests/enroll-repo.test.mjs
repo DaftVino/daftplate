@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
   mkdirSync, writeFileSync, symlinkSync, unlinkSync, existsSync, readFileSync, linkSync,
+  readdirSync,
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { makeRepo, emptyDir } from './helpers/make-repo.mjs';
+import { makeRepo, emptyDir, withOwnedTempRoot } from './helpers/make-repo.mjs';
 import {
   parseEnrollArgs, inspectEnrollmentTarget, buildEnrollmentProposal, summarizeNonCandidates,
   enrollRepo, renderEnrollmentText, toEnrollmentJson,
@@ -135,6 +136,20 @@ test('inspectEnrollmentTarget permits dirt and reports it', () => {
   assert.equal(result.dirty, true);
   assert.deepEqual(result.gitVisible, ['app.mjs']);
 });
+
+test('a Git-visible path containing a space is one path, not two', () => {
+  // The regression guard for replacing the literal NUL in enroll-repo.mjs with
+  // an escape a person can see. `git ls-files -z` separates on NUL precisely so
+  // a filename may contain anything else, a space included; split on a space and
+  // this repository grows a file it does not have.
+  const root = gitInit();
+  writeFileSync(join(root, 'a file with spaces.md'), '# spaced\n', 'utf8');
+
+  const result = inspectEnrollmentTarget(root, []);
+
+  assert.deepEqual(result.gitVisible, ['a file with spaces.md']);
+});
+
 
 test('inspectEnrollmentTarget refuses every root engineering-standards entry type', (t) => {
   for (const kind of ['file', 'directory']) {
@@ -360,6 +375,79 @@ test('enrollRepo defaults to a complete dry run that writes nothing', () => {
   assert.ok(result.adopted.length > 0);
 });
 
+test('enrollment refuses before staging when the OS temp root is inside the target', () => {
+  // The mirror of sync's guard, which enrollment never had. TMPDIR=<target> put a
+  // full scaffold -- a second .daftplate.json included -- inside the repository
+  // being enrolled, and killing the process before the finally left it there.
+  //
+  // It corrupted the report too, without any need to be interrupted:
+  // inspectEnrollmentTarget runs after composition, so its `git ls-files --others`
+  // saw the staging tree and counted daftplate's own scaffold as files the
+  // repository owns. Measured before this guard: unmanaged went from 0 to 24.
+  const fixture = makeEnrollableRepository();
+  const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+  try {
+    process.env.TMPDIR = fixture.target;
+    process.env.TEMP = fixture.target;
+    process.env.TMP = fixture.target;
+
+    assert.throws(
+      () => enrollRepo(fixture.templates, fixture.target, fixture.opts),
+      /refusing to enroll: the OS temp root is inside the target/,
+    );
+    assert.deepEqual(
+      readdirSync(fixture.target).filter((n) => n.startsWith('daftplate-enroll-')),
+      [],
+    );
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+
+test('enrollment staging cleanup uses the root captured at creation, not one read again later', () => {
+  // The other half of D7, and the reason the temp root is threaded rather than
+  // re-read: removeStaging validates the staging path against a root, and reading
+  // tmpdir() again at cleanup validates it against a root that no longer holds
+  // it. The old code then threw "refusing to remove a staging path outside ..."
+  // out of a finally, turning a successful enrollment into a failure and leaving
+  // the staging tree behind.
+  //
+  // Asserted over a temp root this test OWNS -- #231 (FORGE-301). The previous
+  // shape asserted only `result.written === false`, which is true whether or not
+  // the staging tree was removed at all: measured under mutation, deleting the
+  // removeStaging call in the finally left the whole suite green while every
+  // enrollment leaked a full scaffold into the machine's temp directory. Reading
+  // that shared root instead would have swapped one wrong answer for another,
+  // since a leftover there belongs to whatever put it there.
+  const fixture = makeEnrollableRepository();
+  const moved = emptyDir();
+  let result;
+
+  const owned = withOwnedTempRoot(() => {
+    result = enrollRepo(fixture.templates, fixture.target, {
+      ...fixture.opts,
+      hooks: {
+        beforeStabilityCheck: () => {
+          process.env.TMPDIR = moved;
+          process.env.TEMP = moved;
+          process.env.TMP = moved;
+        },
+      },
+    });
+  });
+
+  assert.equal(result.written, false);
+  // Removed from the root captured at creation, which the environment no longer
+  // names, and never created in the one it now names.
+  assert.deepEqual(readdirSync(owned).filter((n) => n.startsWith('daftplate-enroll-')), []);
+  assert.deepEqual(readdirSync(moved), []);
+});
+
+
 test('enrollRepo --write creates only a validated manifest', () => {
   const fixture = makeEnrollableRepository();
   const before = new Map(contentOf(fixture.target));
@@ -466,6 +554,39 @@ test('enrollRepo never overwrites a manifest that appears DURING installation', 
   assert.equal(readFileSync(join(fixture.target, PROVENANCE_FILE), 'utf8'), winner);
 });
 
+test('enrollment leaves no staging directory in the target, published or refused (G5)', () => {
+  // #217 (FORGE-277). G5 says the only file enrollment may create in the target is
+  // .daftplate.json, and the atomic writer stages inside the target directory to
+  // keep the publication a rename rather than a copy -- so G5 is only as true as
+  // that cleanup. Neither neighbour observes it: `--write creates only a validated
+  // manifest` compares contentOf(), which drops directories, and the interrupted
+  // install below throws in a hook that fires before staging exists.
+  const staging = (root) => readdirSync(root).filter((name) => name.startsWith('.daftplate-'));
+
+  const published = makeEnrollableRepository();
+  const result = enrollRepo(published.templates, published.target, {
+    ...published.opts, write: true,
+  });
+
+  assert.equal(result.written, true);
+  assert.equal(existsSync(join(published.target, PROVENANCE_FILE)), true);
+  assert.deepEqual(staging(published.target), [], 'after a published manifest');
+
+  // The publisher is the only seam that both reaches the staging path and fails on
+  // it: a link that refuses leaves enrollment inside the writer's finally block
+  // with a staging directory already created in the target.
+  const refused = makeEnrollableRepository();
+
+  assert.throws(() => enrollRepo(refused.templates, refused.target, {
+    ...refused.opts,
+    write: true,
+    link: () => { throw Object.assign(new Error('nope'), { code: 'ENOTSUP' }); },
+  }), /hard link/i);
+
+  assert.equal(existsSync(join(refused.target, PROVENANCE_FILE)), false);
+  assert.deepEqual(staging(refused.target), [], 'after a refused publication');
+});
+
 test('an interrupted install leaves no manifest at all, partial or otherwise', () => {
   const fixture = makeEnrollableRepository();
 
@@ -476,7 +597,11 @@ test('an interrupted install leaves no manifest at all, partial or otherwise', (
   }), /power cut/);
 
   assert.equal(existsSync(join(fixture.target, PROVENANCE_FILE)), false);
-  // Nothing daftplate staged survives in the target either (CLAUDE.md #5).
+  // A backstop over the whole tree, and not the staging guarantee it used to claim
+  // to be: `beforeInstall` fires before the atomic writer is called, so no staging
+  // directory enrollment made can exist by the time this hook throws. What it does
+  // catch is debris from the fixture's own scaffold, which publishes a manifest the
+  // same way. The enrollment guarantee is the test above.
   assert.deepEqual(walkFiles(fixture.target).filter(({ rel }) => rel.includes('daftplate-')), []);
 });
 

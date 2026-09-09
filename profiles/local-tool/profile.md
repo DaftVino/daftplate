@@ -18,6 +18,7 @@ verify: npm test
 test: npm test
 deploy: n/a
 docs-subdirs: designs, adr
+roadmap: optional
 ```
 
 ## Extra directories

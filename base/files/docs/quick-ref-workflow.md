@@ -11,6 +11,8 @@
 | The fix itself | **PR** with `Fixes #N` | code + tests |
 | Tests | **`tests/`** in the same PR | code, never markdown |
 | A small change's plan | **PR description** | no separate doc |
+| The live state of the work — what is in flight, next, and parked | **`ROADMAP.md`** at root | Now / Next / Later rows, each naming its rung |
+| A handoff to the next session | **Comment on the issue** | never a file of its own (§6.6) |
 
 "Non-trivial" = multi-PR, touches persisted data, risky enough to review before coding, or an agent executes it unsupervised. Otherwise skip the design doc.
 
@@ -26,13 +28,19 @@ Board variant: repos on the Linear board (repo-standards §6.5.1) still create e
 5. Push + open PR                       gh pr create --fill   (body: "Fixes #42")
 6. Verify: tests / local-verify pass
 7. Squash-merge, delete branch          gh pr merge --squash --delete-branch
-8. Issue auto-closes via "Fixes #42"
+8. Issue auto-closes via that footer  (writing ABOUT one? split it: "Fixes" + "#42")
 ```
 
 Never commit directly to `main`. Branches live days, not weeks. Always branch off
 `main`, never off another branch — a stacked branch breaks when its parent
 squash-merges, and the fix is `git rebase --onto main <parent-tip> <child>`, not
 `git rebase main`.
+
+Branch names are `type/N-slug` — `fix/62-scaffold-dest-guard` — and a pre-push
+hook installed by `setup-repo` refuses anything else, plus any direct push to
+`main`. Rename with `git branch -m <type>/<issue>-<slug>`; to push once anyway,
+`DAFTPLATE_ALLOW_NONSTANDARD_BRANCH=1 git push`. Re-run `setup-repo` in an older
+repo to install the hook.
 
 ## Release (when shipping a version)
 

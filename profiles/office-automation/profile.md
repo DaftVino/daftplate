@@ -18,6 +18,7 @@ verify: pwsh -File scripts/export-vba.ps1 -Check
 test: n/a
 deploy: n/a
 docs-subdirs: designs, adr
+roadmap: optional
 ```
 
 ## Extra directories

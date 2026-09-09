@@ -1,15 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeRepo } from './helpers/make-repo.mjs';
+import { dependabotEntry } from './helpers/dependabot.mjs';
 import { walkFiles } from '../scripts/lib/fs.mjs';
 import {
-  REQUIRED_BASE_FILES, REQUIRED_PROFILE_FILES,
+  REQUIRED_BASE_FILES, REQUIRED_PROFILE_FILES, ROADMAP_VALUES,
   parseProfileMeta, metaValueIssues, checkBase, checkProfiles, checkWorkflows,
   workflowFiles, verifyTemplates,
 } from '../scripts/verify-templates.mjs';
+import { PRODUCER_CHECKOUT_MARKERS } from '../scripts/setup-repo.mjs';
 
 const PROFILE_MD = [
   '# Profile: x',
@@ -21,6 +24,7 @@ const PROFILE_MD = [
   'test: npm test',
   'deploy: /land-and-deploy',
   'docs-subdirs: designs, adr',
+  'roadmap: optional',
   '```',
   '',
 ].join('\n');
@@ -49,6 +53,7 @@ test('parseProfileMeta reads every required key and splits docs-subdirs', () => 
     test: 'npm test',
     deploy: '/land-and-deploy',
     docsSubdirs: ['designs', 'adr'],
+    roadmap: 'optional',
   });
 });
 
@@ -101,6 +106,83 @@ test('checkProfiles requires the declared headings', () => {
 test('checkProfiles requires a parseable metadata block', () => {
   const files = { ...profile('web-app'), 'profiles/web-app/profile.md': '# Profile: web-app\n\nprose only\n' };
   assert.deepEqual(checkProfiles(makeRepo(files)).map((v) => v.rule), ['profile-metadata']);
+});
+
+// --- the `roadmap:` meta key (plan D1/D7) ---------------------------------
+//
+// The key exists to make "app-profile repo" a fact each profile states about
+// itself rather than a term repo-standards §6.6 leaves undefined. These tests
+// pin both halves: that a profile omitting it is rejected, and that a value
+// outside the two-item set is rejected rather than quietly defaulted.
+
+test('parseProfileMeta rejects a block that omits roadmap', () => {
+  assert.equal(parseProfileMeta(PROFILE_MD.replace('roadmap: optional\n', '')), null);
+});
+
+test('checkProfiles rejects a profile whose meta block omits roadmap', () => {
+  const files = { ...profile('web-app') };
+  files['profiles/web-app/profile.md'] = PROFILE_MD.replace('roadmap: optional\n', '');
+  const violations = checkProfiles(makeRepo(files));
+
+  assert.deepEqual(violations.map((v) => v.rule), ['profile-metadata']);
+  assert.match(violations[0].message, /roadmap/);
+});
+
+test('checkProfiles rejects a roadmap value outside the two classifications', () => {
+  const files = { ...profile('web-app') };
+  files['profiles/web-app/profile.md'] = PROFILE_MD.replace('roadmap: optional', 'roadmap: yes');
+  const violations = checkProfiles(makeRepo(files));
+
+  assert.deepEqual(violations.map((v) => v.rule), ['profile-metadata-roadmap-value']);
+  // The message names the allowed values, because "invalid" alone leaves the
+  // author guessing at a set they cannot see from the profile.md they are editing.
+  for (const value of ROADMAP_VALUES) assert.match(violations[0].message, new RegExp(value));
+});
+
+for (const value of ['required', 'optional']) {
+  test(`checkProfiles accepts roadmap: ${value}`, () => {
+    const files = { ...profile('web-app') };
+    files['profiles/web-app/profile.md'] = PROFILE_MD.replace('roadmap: optional', `roadmap: ${value}`);
+    assert.deepEqual(checkProfiles(makeRepo(files)), []);
+  });
+}
+
+// The rule has to reach the CLI's own entry point, not only checkProfiles: a
+// fixture tree that is complete except for the key is the shape the exit
+// criterion names, and `node scripts/verify-templates.mjs` composes the checks.
+test('verifyTemplates rejects an otherwise-complete tree whose profile omits roadmap', () => {
+  const files = { ...base(), ...profile('web-app') };
+  files['profiles/web-app/profile.md'] = PROFILE_MD.replace('roadmap: optional\n', '');
+  const violations = verifyTemplates(makeRepo(files));
+
+  assert.deepEqual(violations.map((v) => v.rule), ['profile-metadata']);
+  assert.match(violations[0].message, /roadmap/);
+});
+
+// D1's classification table, pinned. The checker proves every profile declares
+// SOMETHING valid; only this proves it declares the right thing. The test applied
+// is "does anyone outside this repo depend on it shipping" — which is why
+// `userscript` is required despite having no deploy step, and why `deploy:` was
+// rejected as a proxy for the classification.
+test('the eight shipped profiles carry the classifications D1 decided', () => {
+  const declared = Object.fromEntries(
+    readdirSync(join(REPO_ROOT, 'profiles'))
+      .map((name) => [
+        name,
+        parseProfileMeta(readFileSync(join(REPO_ROOT, 'profiles', name, 'profile.md'), 'utf8')).roadmap,
+      ]),
+  );
+
+  assert.deepEqual(declared, {
+    'app-monolith': 'required',
+    'content-library': 'optional',
+    'design-vault': 'optional',
+    'gas-webapp': 'required',
+    'local-tool': 'optional',
+    'office-automation': 'optional',
+    userscript: 'required',
+    'web-app': 'required',
+  });
 });
 
 test('checkProfiles rejects a non-kebab profile name', () => {
@@ -171,7 +253,7 @@ test('the base settings.json registers the question gate as a PreToolUse hook', 
 });
 
 test('metaValueIssues rejects a metadata value containing an unresolved token', () => {
-  const meta = { verify: 'node --check <PROJECT_NAME>.js', test: 'npm test', deploy: 'n/a', docsSubdirs: ['designs'] };
+  const meta = { verify: 'node --check <PROJECT_NAME>.js', test: 'npm test', deploy: 'n/a', docsSubdirs: ['designs'], roadmap: 'required' };
   const issues = metaValueIssues(meta, 'profiles/x/profile.md');
 
   assert.equal(issues.length, 1);
@@ -181,7 +263,7 @@ test('metaValueIssues rejects a metadata value containing an unresolved token', 
 });
 
 test('metaValueIssues rejects the node --test <dir> form, which runs nothing', () => {
-  const meta = { verify: 'npm run build', test: 'node --test tests/', deploy: 'n/a', docsSubdirs: ['designs'] };
+  const meta = { verify: 'npm run build', test: 'node --test tests/', deploy: 'n/a', docsSubdirs: ['designs'], roadmap: 'required' };
   const issues = metaValueIssues(meta, 'profiles/x/profile.md');
 
   assert.equal(issues.length, 1);
@@ -190,7 +272,7 @@ test('metaValueIssues rejects the node --test <dir> form, which runs nothing', (
 });
 
 test('metaValueIssues passes a clean block', () => {
-  const meta = { verify: 'npm run build', test: 'npm test', deploy: '/land-and-deploy', docsSubdirs: ['designs'] };
+  const meta = { verify: 'npm run build', test: 'npm test', deploy: '/land-and-deploy', docsSubdirs: ['designs'], roadmap: 'required' };
 
   assert.deepEqual(metaValueIssues(meta, 'profiles/x/profile.md'), []);
 });
@@ -198,7 +280,7 @@ test('metaValueIssues passes a clean block', () => {
 // A4 (D9): the loop runs over verify, test and deploy but only verify is fed a
 // bad value in the planned tests, so a typo in the key list would ship silently.
 test('metaValueIssues catches an unresolved token in the test key', () => {
-  const meta = { verify: 'npm test', test: 'npm run <PROJECT_NAME>', deploy: 'n/a', docsSubdirs: ['designs'] };
+  const meta = { verify: 'npm test', test: 'npm run <PROJECT_NAME>', deploy: 'n/a', docsSubdirs: ['designs'], roadmap: 'required' };
   const issues = metaValueIssues(meta, 'profiles/x/profile.md');
 
   assert.equal(issues.length, 1);
@@ -207,7 +289,7 @@ test('metaValueIssues catches an unresolved token in the test key', () => {
 });
 
 test('metaValueIssues catches an unresolved token in the deploy key', () => {
-  const meta = { verify: 'npm test', test: 'npm test', deploy: 'ship <PROJECT_NAME>', docsSubdirs: ['designs'] };
+  const meta = { verify: 'npm test', test: 'npm test', deploy: 'ship <PROJECT_NAME>', docsSubdirs: ['designs'], roadmap: 'required' };
   const issues = metaValueIssues(meta, 'profiles/x/profile.md');
 
   assert.equal(issues.length, 1);
@@ -218,7 +300,7 @@ test('metaValueIssues catches an unresolved token in the deploy key', () => {
 // A2 (D12): metadata must not name a script the profile does not ship.
 test('metaValueIssues flags a metadata value naming a script the profile does not ship', () => {
   const root = makeRepo({ 'profiles/x/profile.md': PROFILE_MD });
-  const meta = { verify: 'node scripts/local-verify.mjs', test: 'npm test', deploy: 'n/a', docsSubdirs: ['designs'] };
+  const meta = { verify: 'node scripts/local-verify.mjs', test: 'npm test', deploy: 'n/a', docsSubdirs: ['designs'], roadmap: 'required' };
   const issues = metaValueIssues(meta, 'profiles/x/profile.md', join(root, 'profiles', 'x'));
 
   assert.equal(issues.length, 1);
@@ -231,7 +313,7 @@ test('metaValueIssues accepts a script the profile actually ships', () => {
     'profiles/x/profile.md': PROFILE_MD,
     'profiles/x/files/scripts/local-verify.mjs': '// stub\n',
   });
-  const meta = { verify: 'node scripts/local-verify.mjs', test: 'npm test', deploy: 'n/a', docsSubdirs: ['designs'] };
+  const meta = { verify: 'node scripts/local-verify.mjs', test: 'npm test', deploy: 'n/a', docsSubdirs: ['designs'], roadmap: 'required' };
 
   assert.deepEqual(metaValueIssues(meta, 'profiles/x/profile.md', join(root, 'profiles', 'x')), []);
 });
@@ -628,39 +710,6 @@ test('this repo mirrors every file the base dot-github layer ships', () => {
   );
 });
 
-/** One `updates:` item, as raw lines. No YAML parser is available (CLAUDE.md #4),
- *  so this walks indentation: an item starts at `- package-ecosystem: <x>` and
- *  runs until the next line indented no deeper than that `-`.
- *
- *  Scoping to the item is the whole point, and three independent regexes over the
- *  file would not do it. This config passes "contains github-actions" AND
- *  "contains interval: weekly" while performing no action updates whatsoever:
- *
- *      updates:
- *        - package-ecosystem: github-actions
- *          directory: /
- *        - package-ecosystem: npm
- *          directory: /
- *          schedule:
- *            interval: weekly
- *
- *  Comments are stripped first so prose about the ecosystem cannot stand in for
- *  a declaration of it. */
-function dependabotEntry(text, ecosystem) {
-  const lines = text.split(/\r?\n/).filter((line) => !/^\s*#/.test(line));
-  const opener = new RegExp(`^(\\s*)-\\s+package-ecosystem:\\s*['"]?${ecosystem}['"]?\\s*$`);
-  const start = lines.findIndex((line) => opener.test(line));
-  if (start === -1) return null;
-
-  const column = lines[start].match(/^\s*/)[0].length;
-  const body = [lines[start]];
-  for (let i = start + 1; i < lines.length; i++) {
-    if (lines[i].trim() === '') continue;
-    if (lines[i].match(/^\s*/)[0].length <= column) break;
-    body.push(lines[i]);
-  }
-  return body.join('\n');
-}
 
 // `github-actions` is the ecosystem that understands SHA pins: it rewrites the
 // hash and the trailing `# vX.Y.Z` comment together, which is why D1 made that
@@ -695,4 +744,276 @@ test('dependabotEntry does not borrow a schedule from a neighbouring ecosystem',
   const entry = dependabotEntry(mutated, 'github-actions');
   assert.ok(entry, 'the entry itself is still present');
   assert.equal(/interval:/.test(entry), false, 'the npm schedule must not leak into the actions entry');
+});
+
+// --- the Node runtime is resolved, never pinned (#117) -----------------------
+
+/** A workflow with a setup-node step, parameterised so each mutation is one edit. */
+const nodeWorkflow = ({
+  resolver = true,
+  id = 'node-version',
+  command = 'node scripts/resolve-node-version.mjs >> "$GITHUB_OUTPUT"',
+  version = '${{ steps.node-version.outputs.node-version }}',
+  resolverAfter = false,
+} = {}) => {
+  const resolverStep = [
+    '      - name: Resolve the Node version this repository declares',
+    `        id: ${id}`,
+    `        run: ${command}`,
+  ];
+  const setupStep = [
+    `      - uses: actions/setup-node@${SHA}   # v7.0.0`,
+    '        with:',
+    `          node-version: ${version}`,
+  ];
+  return [
+    'name: ci', '', 'jobs:', '  job:', '    runs-on: ubuntu-latest', '    steps:',
+    ...(resolver && !resolverAfter ? resolverStep : []),
+    ...setupStep,
+    ...(resolver && resolverAfter ? resolverStep : []),
+    '',
+  ].join('\n');
+};
+
+test('a canonical resolver/setup-node pair is accepted', () => {
+  assert.deepEqual(rulesFor({ [BASE_CI]: nodeWorkflow() }), []);
+});
+
+test('a literal node-version is rejected', () => {
+  // The original defect: '20', four months past end of life, in four files.
+  for (const version of ["'20'", '"24"', '20', 'lts/*']) {
+    const rules = rulesFor({ [BASE_CI]: nodeWorkflow({ version }) });
+    assert.equal(rules.includes('workflow-static-node-version'), true, `accepted ${version}`);
+  }
+});
+
+test('a setup-node with no resolver step at all is rejected', () => {
+  const rules = rulesFor({ [BASE_CI]: nodeWorkflow({ resolver: false, version: "'20'" }) });
+  assert.equal(rules.includes('workflow-missing-node-resolver'), true);
+});
+
+test('a resolver placed after setup-node is rejected', () => {
+  // Order is the whole contract: the output does not exist yet when setup-node
+  // reads it, and the step would silently receive an empty string.
+  const rules = rulesFor({ [BASE_CI]: nodeWorkflow({ resolverAfter: true }) });
+  assert.equal(rules.includes('workflow-missing-node-resolver'), true);
+});
+
+test('a resolver whose output nothing consumes is rejected', () => {
+  // A step that runs and changes nothing reads as compliance at a glance.
+  const rules = rulesFor({
+    [BASE_CI]: nodeWorkflow({ version: '${{ steps.something-else.outputs.node-version }}' }),
+  });
+  assert.equal(rules.includes('workflow-unused-node-resolver'), true);
+});
+
+test('a renamed step id or a different command is rejected', () => {
+  assert.equal(
+    rulesFor({ [BASE_CI]: nodeWorkflow({ id: 'node' }) }).includes('workflow-missing-node-resolver'),
+    true,
+  );
+  assert.equal(
+    rulesFor({ [BASE_CI]: nodeWorkflow({ command: 'echo node-version=24 >> "$GITHUB_OUTPUT"' }) })
+      .includes('workflow-missing-node-resolver'),
+    true,
+  );
+});
+
+test('every workflow this repo actually ships resolves its Node version', () => {
+  // The live assertion, not a fixture one: the four real files are the thing
+  // #117 was filed about, and a fixture-only test would pass with them unfixed.
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const shipped = checkWorkflows(root).filter((v) => v.rule.includes('node'));
+  assert.deepEqual(shipped, []);
+
+  for (const rel of [
+    '.github/workflows/ci.yml',
+    'base/files/dot-github/workflows/ci.yml',
+    'profiles/content-library/files/dot-github/workflows/library.yml',
+    'profiles/design-vault/files/dot-github/workflows/vault.yml',
+  ]) {
+    const text = readFileSync(join(root, rel), 'utf8');
+    assert.match(text, /scripts\/resolve-node-version\.mjs/, `${rel} does not resolve`);
+    assert.doesNotMatch(text, /node-version: '\d/, `${rel} still pins a literal`);
+  }
+});
+
+test('daftplate declares the runtime its own CI will now resolve', () => {
+  // Fixing the templates while this repo still declared >=20 would leave the
+  // source repo asserting the dead version it just stopped shipping.
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  assert.equal(pkg.engines.node, '>=24 <25');
+  assert.equal('dependencies' in pkg, false);
+  assert.equal('devDependencies' in pkg, false);
+});
+
+// --- the base CI installs locked dependencies before testing (#113) ----------
+
+test('the base CI template installs before it tests, guarded by a lockfile', () => {
+  // The template went straight from setup-node to `npm test --if-present` with
+  // no install anywhere, which is correct for a dependency-free repo and
+  // silently fatal for one with dependencies: the suite fails with
+  // MODULE_NOT_FOUND, which reads as a broken test file rather than a missing
+  // install. It took a red CI run on a real PR to spot.
+  for (const rel of ['base/files/dot-github/workflows/ci.yml', '.github/workflows/ci.yml']) {
+    const text = readFileSync(join(REPO_ROOT, rel), 'utf8');
+    const install = text.indexOf('npm ci');
+    const testStep = text.indexOf('npm test --if-present');
+
+    assert.notEqual(install, -1, `${rel} has no npm ci step`);
+    assert.notEqual(testStep, -1, `${rel} lost its test step`);
+    // Order, not mere presence: an install after the test step installs nothing
+    // that the test could have used.
+    assert.ok(install < testStep, `${rel} installs after it tests`);
+    // Guarded, so a dependency-free repo is not broken to fix a repo with
+    // dependencies. An unconditional npm ci fails outright with no lockfile.
+    assert.match(text, /if \[ -f package-lock\.json \]; then/);
+  }
+});
+
+test('the install guard preserves the no-lockfile path and the pinned contract', () => {
+  const text = readFileSync(join(REPO_ROOT, 'base/files/dot-github/workflows/ci.yml'), 'utf8');
+
+  assert.match(text, /No package-lock\.json — nothing to install\./);
+  // The security contract §2.2 requires is untouched by this addition.
+  assert.match(text, /persist-credentials: false/);
+  assert.match(text, /permissions:[\s\S]{0,20}contents: read/);
+  // Every action still pinned to a full 40-hex SHA — checkWorkflows enforces
+  // this repo-wide, and this asserts the addition did not disturb it here.
+  for (const line of text.split(/\r?\n/).filter((l) => l.includes('uses:'))) {
+    assert.match(line, /@[0-9a-f]{40}\b/, `unpinned action: ${line.trim()}`);
+  }
+});
+
+test('the base CI refuses a tracked engineering-standards copy', () => {
+  // The pre-commit hook is local and --no-verify walks past it, so the merge
+  // barrier has to exist server-side too. Same anchored predicate, so the two
+  // cannot drift into disagreeing about what a vendored copy is.
+  for (const rel of ['base/files/dot-github/workflows/ci.yml', '.github/workflows/ci.yml']) {
+    const text = readFileSync(join(REPO_ROOT, rel), 'utf8');
+    assert.match(text, /Refuse a vendored copy of the engineering standards/);
+    assert.match(text, /git ls-files --error-unmatch engineering-standards/);
+    assert.match(text, /ADR 0001/);
+    // Refuses; never deletes.
+    assert.doesNotMatch(text, /git rm|rm -rf/);
+  }
+});
+
+test('the vendored guard runs before the test step, not after it', () => {
+  const text = readFileSync(join(REPO_ROOT, 'base/files/dot-github/workflows/ci.yml'), 'utf8');
+  const guard = text.indexOf('Refuse a vendored copy');
+  const testStep = text.indexOf('npm test --if-present');
+  assert.ok(guard !== -1 && testStep !== -1);
+  assert.ok(guard < testStep, 'the vendored guard runs after the tests');
+});
+
+// --- the vendored guard, executed rather than pattern-matched -----------------
+//
+// The three tests above read the workflow as text. Text is what let the guard
+// ship refusing the one repository it was written in: every string assertion
+// passed while `test` failed on every run (CI run 32719928626). So the guard's
+// own shell body is extracted from the shipped workflow and RUN, against this
+// checkout and against fixtures — the only form that can distinguish "the step
+// is present" from "the step is right".
+//
+// `sh` is already a hard prerequisite of this suite: tests/setup-repo.test.mjs
+// drives a `#!/bin/sh` hook through `git hook run`. Nothing new is required.
+
+/** The `run:` body of the vendored-standards step, dedented to a runnable script. */
+function vendoredGuardScript(rel = '.github/workflows/ci.yml') {
+  const text = readFileSync(join(REPO_ROOT, rel), 'utf8');
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.includes('Refuse a vendored copy of the engineering standards'));
+  assert.notEqual(start, -1, `${rel} has no vendored-standards step`);
+  assert.match(lines[start + 1], /run: \|/, `${rel}'s guard is not a literal run block`);
+  const body = [];
+  for (const line of lines.slice(start + 2)) {
+    // The block ends at the first line indented less than its contents.
+    if (line.trim() !== '' && !line.startsWith('          ')) break;
+    body.push(line.replace(/^ {10}/, ''));
+  }
+  assert.ok(body.length > 3, `${rel}'s guard body did not extract`);
+  return body.join('\n');
+}
+
+const runGuard = (script, cwd) => spawnSync('sh', ['-c', script], { cwd, encoding: 'utf8' });
+
+/** A git repo with the given files tracked. */
+function trackedRepo(files) {
+  const dir = makeRepo(files);
+  const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  git('init', '-b', 'main');
+  git('add', '-A');
+  return dir;
+}
+
+test('the vendored guard passes in the checkout that owns the standards', () => {
+  // The defect this closes, stated as a property: daftplate tracks
+  // engineering-standards/ because ADR 0001 makes it canonical HERE, so the
+  // guard must exit 0 in this repository. It exited 1, on every run, from the
+  // commit that introduced it until this one.
+  //
+  // Asserted against the live workflow and the template both, because the two
+  // are byte-identical by contract and a fix applied to one is not a fix.
+  for (const rel of ['.github/workflows/ci.yml', 'base/files/dot-github/workflows/ci.yml']) {
+    const r = runGuard(vendoredGuardScript(rel), REPO_ROOT);
+    assert.equal(r.status, 0, `${rel} refuses this repository: ${r.stderr}`);
+    assert.doesNotMatch(r.stderr, /is tracked here/);
+  }
+});
+
+test('the vendored guard still refuses a consumer repo that vendors the standards', () => {
+  // The exemption must not have been bought by disabling the rule. A repo with
+  // neither producer marker and a tracked copy is the case the guard exists for.
+  const dir = trackedRepo({
+    'README.md': '# consumer\n',
+    'engineering-standards/repo-standards.md': '# a frozen copy\n',
+  });
+
+  const r = runGuard(vendoredGuardScript(), dir);
+
+  assert.equal(r.status, 1, 'a vendored copy was accepted');
+  assert.match(r.stderr, /engineering-standards\/ is tracked here/);
+  assert.match(r.stderr, /ADR 0001/);
+});
+
+test('both producer markers are required, and neither alone exempts a repo', () => {
+  // `profiles/` alone is an ordinary directory name and `base/files/` alone is
+  // the shape of a half-copied template. Each is tested on its own, because a
+  // guard written with `||` instead of `&&` passes the pair test above and
+  // hands the exemption to any repo holding either one.
+  for (const marker of ['base/files', 'profiles']) {
+    const dir = trackedRepo({
+      'README.md': '# consumer\n',
+      [`${marker}/placeholder.md`]: '# not the producer\n',
+      'engineering-standards/repo-standards.md': '# a frozen copy\n',
+    });
+
+    const r = runGuard(vendoredGuardScript(), dir);
+
+    assert.equal(r.status, 1, `${marker}/ alone exempted a consumer repo`);
+    assert.match(r.stderr, /engineering-standards\/ is tracked here/);
+  }
+});
+
+test('the guard exempts by shape, and the shape is the one the hook uses', () => {
+  // One list, read by the hook, the workflow and both their tests. The commit
+  // that added the guard claimed the hook and CI "cannot drift"; that claim is
+  // only true if something checks the marker names too, not just the pattern.
+  for (const rel of ['.github/workflows/ci.yml', 'base/files/dot-github/workflows/ci.yml']) {
+    const script = vendoredGuardScript(rel);
+    for (const marker of PRODUCER_CHECKOUT_MARKERS) {
+      // A literal substring, not a built regex. The first draft of this line was
+      // `new RegExp(`\[ -d ${marker} \]`)`, where the escapes collapse in a
+      // template literal and leave `[ -d base/files ]` — a character class that
+      // matches any one of those characters, so it passed against a guard testing
+      // `base/layers`. Caught by applying the rename mutation, which is the whole
+      // argument of §12.
+      assert.ok(
+        script.includes(`[ -d ${marker} ]`),
+        `${rel} does not test for ${marker}`,
+      );
+    }
+  }
 });

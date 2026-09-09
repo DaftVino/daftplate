@@ -24,7 +24,7 @@
 // exact failure this probe exists to prevent. The payload's `cwd` is the only
 // field we would want, and `process.cwd()` already equals the project root when
 // Claude Code runs a hook — verified 2026-07-22.
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -92,12 +92,60 @@ const WITH_DISCIPLINE = `${BRIEF}This repo holds at least one file over 50KB: do
 const BRIEF_ONLY = `${BRIEF}Report state only: no file in this repo is large enough for the `
   + `read-size discipline to apply, so skip that section of the skill. ${ESCAPE}`;
 
+/** The three toggle skills whose session default is persisted. `insist` already
+ *  had a file; `brief` and `curious` gained one with the config menu. */
+const TOGGLES = ['brief', 'insist', 'curious'];
+
+/**
+ * The toggles reading `on`, in `~/.daftplate/`.
+ *
+ * Read here rather than imported from `scripts/config-menu.mjs`, for the reason
+ * the run-as-script guard below is inlined: this file ships into other repos,
+ * where that module does not exist.
+ *
+ * A file that is absent, unreadable, or holds anything other than `on` counts as
+ * off. This runs on every session start and must never be the reason one fails.
+ */
+export function activeToggles(homeDir) {
+  return TOGGLES.filter((name) => {
+    try {
+      return readFileSync(join(homeDir, '.daftplate', name), 'utf8').trim().toLowerCase() === 'on';
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** One line, appended — not a new section. `/orient` is budgeted at under 30
+ *  lines of output and this is one of them. */
+function toggleLine(homeDir) {
+  const active = activeToggles(homeDir);
+  // Nothing at all when nothing is on. A line reading "active: none" is a line
+  // spent teaching that a feature exists, on every session, forever.
+  if (!active.length) return '';
+  return ` Session defaults from ~/.daftplate/: ${active.join(', ')} ${active.length === 1 ? 'is' : 'are'} on.`;
+}
+
 export function orientContext(homeDir, repoRoot = process.cwd()) {
-  if (!existsSync(join(homeDir, '.claude', 'skills', 'orient', 'SKILL.md'))) return '';
+  // Unchanged: no skills installed, no payload. The toggle line rides on this
+  // payload rather than replacing the guard, because `~/.daftplate/` only exists
+  // on a machine where the skills were installed in the first place.
+  //
+  // Two shapes, because both are real. daftplate installs one plugin tree at
+  // `~/.claude/skills/daftplate/` (ADR 0002, amended 2026-09-02), but the loose
+  // per-skill directories linger until the owner removes them and the installer
+  // never deletes. Checking only the new shape would silence this hook on every
+  // machine that has not migrated; checking only the old one silences it on every
+  // machine that has. The check is inlined rather than imported because this file
+  // ships into other repos, where scripts/ does not exist.
+  const installed = ['skills/daftplate/skills/orient/SKILL.md', 'skills/orient/SKILL.md']
+    .some((rel) => existsSync(join(homeDir, '.claude', ...rel.split('/'))));
+  if (!installed) return '';
+  const brief = hasLargeFile(repoRoot) ? WITH_DISCIPLINE : BRIEF_ONLY;
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: hasLargeFile(repoRoot) ? WITH_DISCIPLINE : BRIEF_ONLY,
+      additionalContext: `${brief}${toggleLine(homeDir)}`,
     },
   });
 }

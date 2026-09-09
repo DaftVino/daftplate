@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { emptyDir } from './helpers/make-repo.mjs';
 import { scaffold } from '../scripts/scaffold.mjs';
+import { MAX_PROVENANCE_SCHEMA } from '../scripts/lib/provenance.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -80,3 +81,46 @@ for (const type of PROFILES) {
     assert.match(readFileSync(target, 'utf8'), /package-ecosystem:\s*github-actions/);
   });
 }
+
+test('a scaffolded check-roadmap.mjs is byte-identical to its template', () => {
+  const dest = emptyDir();
+  scaffold(ROOT, 'web-app', dest, values('dry-token-literal'));
+  assert.equal(
+    readFileSync(join(dest, 'scripts', 'check-roadmap.mjs'), 'utf8'),
+    readFileSync(join(ROOT, 'base', 'files', 'scripts', 'check-roadmap.mjs'), 'utf8'),
+  );
+});
+
+test('the scaffolded rule-7 comment still names the token and its owner', () => {
+  const dest = emptyDir();
+  scaffold(ROOT, 'web-app', dest, values('dry-token-comment'));
+  const text = readFileSync(join(dest, 'scripts', 'check-roadmap.mjs'), 'utf8');
+  assert.match(text, /PROJECT_NAME/);
+  assert.match(text, /verify-repo/);
+  assert.equal(/<PROJECT_NAME>/.test(text), false);
+});
+
+test('base.md records that a copied template may not show a bracketed token', () => {
+  const text = readFileSync(join(ROOT, 'base', 'base.md'), 'utf8');
+  assert.match(text, /never show a token in its bracketed form/i);
+  assert.match(text, /verify-repo/);
+});
+
+test('a .git-only destination scaffolds through the real layers with .git intact', () => {
+  // Kills the mutation where the helper accepts .git but a later stage — layer
+  // composition, substitution, provenance, or the verifier — rejects or rewrites it.
+  const dest = emptyDir();
+  const head = 'ref: refs/heads/main\n';
+  mkdirSync(join(dest, '.git'), { recursive: true });
+  writeFileSync(join(dest, '.git', 'HEAD'), head, 'utf8');
+
+  const { violations, provenance } = scaffold(ROOT, 'local-tool', dest, values('dry-git-only'));
+
+  assert.deepEqual(violations, []);
+  assert.equal(readFileSync(join(dest, '.git', 'HEAD'), 'utf8'), head);
+  assert.equal(provenance.schema, MAX_PROVENANCE_SCHEMA);
+  assert.equal(
+    Object.values(provenance.files).every((e) => e.ownership === 'managed'),
+    true,
+  );
+});

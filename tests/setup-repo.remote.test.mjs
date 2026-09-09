@@ -33,17 +33,24 @@ test('ghJson returns null on unparseable output rather than throwing', () => {
   assert.equal(ghJson(['api', 'repos/o/r'], run), null);
 });
 
-test('probeRemote reports visibility and plan for a reachable repo', () => {
+// The repository payload carries NO plan key — verified against the raw live API
+// and pinned in tests/github-payload-contract.test.mjs. Every mock below reflects
+// that. `probeRemote treats a missing plan block as free` used to live here; it is
+// DELETED rather than inverted, because its subject was the repository payload's
+// plan block and there is no such thing. Its replacement is a different assertion
+// about a different endpoint.
+const repoPayload = (over = {}) => JSON.stringify({
+  private: true, owner: { login: 'o', type: 'User' }, ...over,
+});
+
+test('probeRemote reports visibility and the owner account plan for a reachable repo', () => {
   const run = fakeRun({
-    'api repos/o/r': {
-      status: 0,
-      stdout: JSON.stringify({ private: true, owner: { type: 'User' }, plan: { name: 'free' } }),
-      stderr: '',
-    },
+    'api repos/o/r': { status: 0, stdout: repoPayload(), stderr: '' },
+    'api user': { status: 0, stdout: JSON.stringify({ login: 'o', plan: { name: 'pro' } }), stderr: '' },
   });
 
   assert.deepEqual(probeRemote('o/r', run), {
-    slug: 'o/r', private: true, plan: 'free', reachable: true,
+    slug: 'o/r', private: true, plan: 'pro', reachable: true,
   });
 });
 
@@ -51,13 +58,76 @@ test('probeRemote marks an unreachable repo rather than throwing', () => {
   const probe = probeRemote('o/missing', fakeRun({}));
   assert.equal(probe.reachable, false);
   assert.equal(probe.slug, 'o/missing');
+  // Unknown, not free: an unreachable repo tells us nothing about its tier.
+  assert.equal(probe.plan, null);
 });
 
-test('probeRemote treats a missing plan block as free', () => {
+test('a foreign user-owned repo does not inherit the authenticated user plan', () => {
+  // `api user` reports whoever holds the token. Accepting its plan for somebody
+  // else's repository would hand a stranger's repo this machine's tier.
   const run = fakeRun({
-    'api repos/o/r': { status: 0, stdout: JSON.stringify({ private: false, owner: { type: 'User' } }), stderr: '' },
+    'api repos/other/r': {
+      status: 0,
+      stdout: JSON.stringify({ private: true, owner: { login: 'other', type: 'User' } }),
+      stderr: '',
+    },
+    'api user': { status: 0, stdout: JSON.stringify({ login: 'me', plan: { name: 'pro' } }), stderr: '' },
   });
-  assert.equal(probeRemote('o/r', run).plan, 'free');
+
+  assert.equal(probeRemote('other/r', run).plan, null);
+});
+
+test('an organization owner routes to orgs/{login}, not to the repo slug', () => {
+  const { run, calls } = recordingRun({
+    'api repos/an-org/r': {
+      status: 0,
+      stdout: JSON.stringify({ private: true, owner: { login: 'an-org', type: 'Organization' } }),
+      stderr: '',
+    },
+    'api orgs/an-org': { status: 0, stdout: JSON.stringify({ plan: { name: 'team' } }), stderr: '' },
+  });
+
+  assert.equal(probeRemote('an-org/r', run).plan, 'team');
+  assert.deepEqual(calls.map((c) => c.key), ['api repos/an-org/r', 'api orgs/an-org']);
+  // Never `api user` for an organization, and never the slug where the login goes.
+  assert.equal(calls.some((c) => c.key === 'api user'), false);
+});
+
+test('a successful account response carrying no plan yields null, not free', () => {
+  // The measured case for an organization the caller does not administer: plan
+  // data needs membership and scope, so the key is simply absent.
+  const run = fakeRun({
+    'api repos/an-org/r': {
+      status: 0,
+      stdout: JSON.stringify({ private: true, owner: { login: 'an-org', type: 'Organization' } }),
+      stderr: '',
+    },
+    'api orgs/an-org': { status: 0, stdout: JSON.stringify({ login: 'an-org' }), stderr: '' },
+  });
+
+  assert.equal(probeRemote('an-org/r', run).plan, null);
+});
+
+test('a failed account lookup leaves a reachable repo at an unknown plan', () => {
+  // Account lookup failing is not the repository being unreachable, and it is not
+  // evidence of a free plan either.
+  const run = fakeRun({
+    'api repos/o/r': { status: 0, stdout: repoPayload(), stderr: '' },
+  });
+  const probe = probeRemote('o/r', run);
+
+  assert.equal(probe.reachable, true);
+  assert.equal(probe.plan, null);
+});
+
+test('a private repo with an unknown plan still attempts branch protection', () => {
+  // The whole point of keeping null distinct from free. A wrong `free` is silent
+  // and self-confirming; a wrong `pro` is one 403 that applyRemote already reports.
+  const unknown = byId(remoteSettings({ slug: 'o/r', private: true, plan: null, reachable: true }));
+  assert.equal(unknown['branch-protection'].available, true);
+
+  const explicitFree = byId(remoteSettings({ slug: 'o/r', private: true, plan: 'free', reachable: true }));
+  assert.equal(explicitFree['branch-protection'].available, false);
 });
 
 const byId = (settings) => Object.fromEntries(settings.map((s) => [s.id, s]));
@@ -215,7 +285,7 @@ test('main --remote returns 0 when everything applies', () => {
     // string is a prefix of this call's key too — order matters for
     // remoteRun's substring match.
     'repos/o/r/rulesets': { status: 0, stdout: '[]', stderr: '' },
-    'api repos/o/r': { status: 0, stdout: JSON.stringify({ private: false, plan: { name: 'free' } }), stderr: '' },
+    'api repos/o/r': { status: 0, stdout: JSON.stringify({ private: false, owner: { login: 'o', type: 'User' } }), stderr: '' },
   });
   assert.equal(main(['node', 'setup-repo.mjs', '.', '--remote'], run), 0);
 });
@@ -223,7 +293,7 @@ test('main --remote returns 0 when everything applies', () => {
 test('main --remote returns 0 when settings are merely unavailable', () => {
   const run = remoteRun({
     'repo view': { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' },
-    'api repos/o/r': { status: 0, stdout: JSON.stringify({ private: true, plan: { name: 'free' } }), stderr: '' },
+    'api repos/o/r': { status: 0, stdout: JSON.stringify({ private: true, owner: { login: 'o', type: 'User' } }), stderr: '' },
   });
   // A structural impossibility is not an error.
   assert.equal(main(['node', 'setup-repo.mjs', '.', '--remote'], run), 0);
@@ -237,7 +307,7 @@ test('main --remote returns 1 when an applicable gh call fails', () => {
     // never occurs on one. Only the probe joins to exactly `api repos/o/r`.
     if (key.includes('repo view')) return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
     if (key.includes('branches/main/protection')) return { status: 1, stdout: '', stderr: 'HTTP 422' };
-    if (key.includes('repos/o/r')) return { status: 0, stdout: JSON.stringify({ private: false, plan: { name: 'free' } }), stderr: '' };
+    if (key.includes('repos/o/r')) return { status: 0, stdout: JSON.stringify({ private: false, owner: { login: 'o', type: 'User' } }), stderr: '' };
     return { status: 0, stdout: '{}', stderr: '' };
   };
   assert.equal(main(['node', 'setup-repo.mjs', '.', '--remote'], run), 1);

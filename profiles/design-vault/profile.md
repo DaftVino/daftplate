@@ -18,6 +18,7 @@ verify: node scripts/validate-vault.mjs
 test: n/a
 deploy: n/a
 docs-subdirs: 00-project, 10-world, 20-design, 30-content, 40-research, 50-technical, 90-production, designs, adr
+roadmap: optional
 ```
 
 ## Extra directories

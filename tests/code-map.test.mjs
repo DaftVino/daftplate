@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { makeRepo } from './helpers/make-repo.mjs';
+import { makeRepo, tempDir } from './helpers/make-repo.mjs';
 import {
   scanSource, scanHtml, renderMap, collectFiles, buildCodeMap, sourceCommit,
 } from '../scripts/code-map.mjs';
@@ -254,6 +254,23 @@ test('buildCodeMap honours an explicit --out path', () => {
   assert.equal(existsSync(result.path), true);
 });
 
+test('buildCodeMap writes an absolute --out verbatim, not under repoDir', () => {
+  const dir = makeRepo({ 'app.js': 'function a() {}\n' });
+  const outPath = join(tempDir('pt-out-'), 'nested', 'map.md');
+
+  const result = buildCodeMap(dir, {
+    minBytes: 0, out: outPath, commit: 'abc1234', date: '2026-07-22',
+  });
+
+  assert.equal(result.path, outPath);
+  assert.equal(existsSync(outPath), true);
+  assert.match(readFileSync(outPath, 'utf8'), /`app\.js:1` — `a\(\)`/);
+  // The pre-fix join() mirrored the whole absolute path under the repo; on
+  // Windows that throws ENOENT, on POSIX it silently writes to the wrong place.
+  // Asserting the repo is untouched catches both.
+  assert.deepEqual(readdirSync(dir), ['app.js']);
+});
+
 test('buildCodeMap reports commit "unknown" outside a git repo rather than throwing', () => {
   const dir = makeRepo({ 'app.js': 'function a() {}\n' });
   const result = buildCodeMap(dir, { minBytes: 0 });
@@ -265,7 +282,7 @@ test('buildCodeMap reports commit "unknown" outside a git repo rather than throw
 // rather than against a stub. `prefix` exists so one caller can force a space
 // into the repo path — see the headCommit test below.
 function makeGitRepo(files = {}, prefix = 'pt-git-') {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = tempDir(prefix);
   for (const [rel, contents] of Object.entries(files)) {
     const target = join(dir, rel);
     mkdirSync(dirname(target), { recursive: true });

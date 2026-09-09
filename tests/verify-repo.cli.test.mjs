@@ -31,3 +31,16 @@ test('CLI honours --docs-subdirs', () => {
   assert.equal(run(dir).status, 1);
   assert.equal(run(dir, '--docs-subdirs=designs,adr,database').status, 0);
 });
+
+test('the CLI describes a placeholder as possible and requires verification first', () => {
+  // The safety property lives partly in the wording: a categorical "unresolved
+  // placeholder" tells an agent to resolve it, which for a security delimiter
+  // means deleting a trust boundary. Fixing detection without fixing the message
+  // leaves that half of the defect in place, so this assertion is exact.
+  const dir = makeRepo({ ...MINIMAL, 'docs/notes.md': '# <PROJECT_NAME>\n' });
+  const result = run(dir);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /possible unresolved template placeholder <PROJECT_NAME>/);
+  assert.match(result.stderr, /verify it is a scaffold token before replacing it/);
+});

@@ -1,14 +1,15 @@
 {
   "name": "daftplate",
-  "version": "1.7.0",
+  "version": "1.10.0",
   "private": true,
   "description": "Type-aware repo scaffolding, standards, and agent skills",
   "license": "MIT",
   "author": "James M. Baker",
   "engines": {
-    "node": ">=20"
+    "node": ">=24 <25"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "desk-guides": "node scripts/build-desk-guides.mjs"
   }
 }

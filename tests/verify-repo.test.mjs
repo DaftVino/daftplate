@@ -148,9 +148,72 @@ test('checkNoUnresolvedPlaceholders catches markers and ALL_CAPS tokens in CLAUD
   });
   const messages = checkNoUnresolvedPlaceholders(dir).map((v) => v.message).sort();
   assert.deepEqual(messages, [
-    'unresolved placeholder <PROJECT_SUMMARY>',
+    'possible unresolved template placeholder <PROJECT_SUMMARY>; '
+    + 'verify it is a scaffold token before replacing it',
     'unresolved profile marker <!-- profile:routing -->',
   ]);
+});
+
+test('checkNoUnresolvedPlaceholders ignores tokens nested in additional angle brackets', () => {
+  // <<<X>>> is a prompt-injection delimiter, not an unfilled template slot. The
+  // two asymmetric cases are what prove both adjacency guards exist: a symmetric
+  // <<<X>>> alone is suppressed by either guard on its own.
+  const dir = makeRepo({
+    ...MINIMAL,
+    'src/shared.js': [
+      "const OPEN = '<<<UNTRUSTED_SOURCE_TEXT>>>';",
+      "const LEFT = '<<LEFT_NESTED>';",
+      "const RIGHT = '<RIGHT_NESTED>>';",
+      "const CLOSE = '<<<END_UNTRUSTED_SOURCE_TEXT>>>';",
+    ].join('\n'),
+  });
+  assert.deepEqual(checkNoUnresolvedPlaceholders(dir), []);
+});
+
+test('checkNoUnresolvedPlaceholders still reports a standalone token in an assignment', () => {
+  // #109 proposed exempting a token used as a value on an assignment line. That
+  // would also exempt a genuine unsubstituted scaffold token in a string, which
+  // is where one actually hides.
+  const dir = makeRepo({ ...MINIMAL, 'src/sentinel.js': "const sentinel = '<PLACEHOLDER>';\n" });
+  const found = checkNoUnresolvedPlaceholders(dir);
+
+  assert.equal(found.length, 1);
+  assert.equal(found[0].path, 'src/sentinel.js');
+  assert.equal(
+    found[0].message,
+    'possible unresolved template placeholder <PLACEHOLDER>; '
+    + 'verify it is a scaffold token before replacing it',
+  );
+});
+
+test('checkRootNaming allows ecosystem tool files by shape', () => {
+  // Widgetfile is synthetic and load-bearing: it passes only if the rule is a
+  // shape, not a list of today's tool names.
+  const dir = makeRepo({
+    ...MINIMAL,
+    Dockerfile: 'FROM node:24\n',
+    'Dockerfile.prod': 'FROM node:24\n',
+    'Dockerfile.prod-us': 'FROM node:24\n',
+    Makefile: 'all:\n',
+    Widgetfile: 'widget\n',
+  });
+  assert.deepEqual(checkRootNaming(dir), []);
+});
+
+test('checkRootNaming keeps the tool-file boundary narrower than TitleCase', () => {
+  // README.md is present and correct, so the required-file rule cannot mask the
+  // fact that a stray `Readme` beside it is still a naming violation.
+  const dir = makeRepo({
+    ...MINIMAL,
+    Readme: '# stray\n',
+    'TODOS.md': '# todos\n',
+    DockerFile: 'FROM node:24\n',
+    'Dockerfile.Prod': 'FROM node:24\n',
+  });
+  assert.deepEqual(
+    checkRootNaming(dir).map((v) => v.path).sort(),
+    ['DockerFile', 'Dockerfile.Prod', 'Readme', 'TODOS.md'],
+  );
 });
 
 test('checkNoUnresolvedPlaceholders scans every text file, not just CLAUDE.md', () => {
@@ -184,4 +247,21 @@ test('verifyRepo reports violations from more than one rule', () => {
   const dir = makeRepo({ ...rest, 'engineering-standards/x.md': '# x\n' });
   const rules = new Set(verifyRepo(dir).map((v) => v.rule));
   assert.deepEqual([...rules].sort(), ['root-files', 'vendored-standards']);
+});
+
+test('checkNoVendoredStandards still fires on a gitignored copy', () => {
+  // #101 proposed a .gitignore rule as the remedy. An ignored copy stays on
+  // disk, escapes Git's attention entirely, and still misleads an agent that
+  // reads it as current — which is exactly how one stale copy survived to be
+  // less than half the length of the real standard. The verifier must not learn
+  // to skip ignored paths.
+  const dir = makeRepo({
+    ...MINIMAL,
+    '.gitignore': 'node_modules/\nengineering-standards/\n',
+    'engineering-standards/repo-standards.md': '# a frozen copy\n',
+  });
+
+  const rules = verifyRepo(dir).map((v) => v.rule);
+  // Named specifically: a non-zero count would pass on any unrelated violation.
+  assert.equal(rules.includes('vendored-standards'), true);
 });

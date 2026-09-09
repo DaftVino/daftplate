@@ -1,7 +1,7 @@
 # ADR 0001: Numbered doc buckets supersede the flat-docs rule
 
-- **Status:** Accepted
-- **Date:** <YEAR>-01-01
+**Status:** Accepted
+**Date:** <YEAR>-01-01
 
 ## Context
 
@@ -15,13 +15,13 @@ In a design vault the documents *are* the product, and there are hundreds of the
 
 `scripts/validate-vault.mjs` enforces the list, so an eighth bucket cannot appear without a deliberate edit and this ADR being amended.
 
+## Alternatives considered
+
+- **Keep `docs/` flat and encode the bucket in the filename** (`10-world-harbour.md`). Preserves the standard, but Obsidian's graph and folder panes both become unusable, and the prefix has to be typed into every wikilink.
+- **Put the vault outside `docs/`** entirely, in a top-level `vault/`. Sidesteps §3 rather than superseding it, and puts the product of the repo somewhere no standard describes.
+
 ## Consequences
 
 - `verify-repo.mjs` must be run with `--docs-subdirs=` naming all nine, which the profile's metadata already does.
 - A note is queued to `~/.daftplate/outbox/` so repo-standards §3 gets revisited upstream rather than quietly diverging.
 - Vaults using named rather than numbered buckets edit `VAULT_BUCKETS` and amend this ADR in the same commit.
-
-## Alternatives considered
-
-- **Keep `docs/` flat and encode the bucket in the filename** (`10-world-harbour.md`). Preserves the standard, but Obsidian's graph and folder panes both become unusable, and the prefix has to be typed into every wikilink.
-- **Put the vault outside `docs/`** entirely, in a top-level `vault/`. Sidesteps §3 rather than superseding it, and puts the product of the repo somewhere no standard describes.

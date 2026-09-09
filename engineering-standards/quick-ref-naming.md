@@ -14,7 +14,7 @@
 | ADR | `docs/adr/NNNN-slug.md` | `0003-use-properties-service.md` | `decision-about-storage.md` |
 | Git tag | `vMAJOR.MINOR.PATCH` | `v2.0.5` | `version-2.0.5`, `2.0.5` |
 
-**Uppercase allowed at root only:** `README.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CLAUDE.md`/`AGENTS.md`. Nothing else, nowhere else.
+**Uppercase allowed at root only**, two ways: the canonical list — `README.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CLAUDE.md`/`AGENTS.md` — and ecosystem tool files matching `Uppercase` + lowercase + `file`, with an optional lowercase-kebab variant: `Dockerfile`, `Dockerfile.prod`, `Makefile`. Not `DockerFile`, not `Dockerfile.Prod`, not `Readme`. Nothing else, nowhere else.
 
 ## Branches
 

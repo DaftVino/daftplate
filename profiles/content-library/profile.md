@@ -18,6 +18,7 @@ verify: node scripts/validate-library.mjs
 test: n/a
 deploy: n/a
 docs-subdirs: designs, adr
+roadmap: optional
 ```
 
 ## Extra directories

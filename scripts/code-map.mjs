@@ -10,7 +10,7 @@
 // does not match.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { runCli } from './lib/cli.mjs';
 import { walkFiles } from './lib/fs.mjs';
 
@@ -94,13 +94,25 @@ export function renderMap(files, meta = {}) {
     `git log -1 --format=%h -- ${PATHSPEC.map((p) => `'${p}'`).join(' ')}`,
     '```',
     '',
-    'If that prints anything else, indexed source has changed since the map was',
-    'generated and an anchor may point at the wrong slice — regenerate with',
-    '`/code-map` rather than working around it.',
+    'If that prints anything else, indexed source **may** have changed since the map',
+    'was generated — regenerate with `/code-map` rather than working around it.',
     '',
     'The stamp is the last commit that touched an indexed file, deliberately not',
     '`HEAD`: a map cannot name the commit that adds it, so stamping `HEAD` would',
     'report every freshly-committed map as stale.',
+    '',
+    '**A differing stamp is not proof of staleness, and most often is not.** This',
+    'file is restamped in the same pull request as the source change that moved its',
+    'anchors, and a **squash merge** collapses that source commit and this one into a',
+    'single new SHA — so the commit named above becomes unreachable the moment the',
+    'pull request lands, with every anchor still correct. That happened six times',
+    'between 2026-09-02 and 2026-09-04, every one a false positive.',
+    '',
+    'So the stamp is provenance, not the freshness authority.',
+    '`tests/code-map-freshness.test.mjs` regenerates this map from the working tree',
+    'and fails if any line but the two provenance lines differs, which is the check',
+    'that actually settles whether an anchor can be trusted. If the suite is green,',
+    'this map is current whatever the stamp says.',
     '',
   ];
 
@@ -195,7 +207,7 @@ function gitVisible(repoDir) {
 
 export function buildCodeMap(repoDir, opts = {}) {
   const files = collectFiles(repoDir, opts);
-  const path = join(repoDir, opts.out ?? 'docs/code-map.md');
+  const path = resolve(repoDir, opts.out ?? 'docs/code-map.md');
   mkdirSync(dirname(path), { recursive: true });
   const meta = {
     commit: opts.commit ?? sourceCommit(repoDir),

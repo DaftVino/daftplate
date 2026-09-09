@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeRepo } from './helpers/make-repo.mjs';
 import {
   PROVENANCE_FILE, MAX_PROVENANCE_SCHEMA, fileDigest, buildProvenance, writeProvenance,
-  readProvenance, validateProvenance, unnormalizeProvenance,
+  readProvenance, validateProvenance, unnormalizeProvenance, requiredSchema,
 } from '../scripts/lib/provenance.mjs';
 
 test('fileDigest is a stable sha256 of the file bytes', () => {
@@ -420,4 +420,122 @@ test('a manifest survives validate -> unnormalize unchanged at every schema', ()
       source,
     );
   }
+});
+
+test('writeProvenance create-only refuses to replace an existing manifest', () => {
+  // The mutation this kills: implementing opts.create with writeFileSync, or with a
+  // checked rename. Both replace the rival's bytes; the hard-link branch cannot.
+  const existing = '{ "schema": 3, "daftplate": "9.9.9", "files": {} }\n';
+  const root = makeRepo({ 'README.md': '# x\n', [PROVENANCE_FILE]: existing });
+  const p = buildProvenance({
+    root, version: '0.2.0', profile: 'web-app', tokens: {},
+    files: [{ rel: 'README.md', layer: 'base', mode: 'copied' }],
+  });
+
+  assert.throws(() => writeProvenance(root, p, { create: true }), /refusing to scaffold:/);
+  assert.equal(readFileSync(join(root, PROVENANCE_FILE), 'utf8'), existing);
+});
+
+test('writeProvenance create-only publishes a complete manifest when none exists', () => {
+  const root = makeRepo({ 'README.md': '# x\n' });
+  const p = buildProvenance({
+    root, version: '0.2.0', profile: 'web-app', tokens: {},
+    files: [{ rel: 'README.md', layer: 'base', mode: 'copied' }],
+  });
+
+  const written = writeProvenance(root, p, { create: true });
+
+  assert.equal(written, join(root, PROVENANCE_FILE));
+  assert.deepEqual(JSON.parse(readFileSync(written, 'utf8')), p);
+  // The staging directory the writer created is scoped to itself and cleaned up.
+  assert.deepEqual(
+    readdirSync(root).filter((n) => n.startsWith('.daftplate-')),
+    [],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #222 (FORGE-293) -- the manifest replacement goes through the one atomic
+// writer, and an unparseable manifest names itself.
+
+const eperm = () => Object.assign(new Error('busy'), { code: 'EPERM' });
+
+test('writeProvenance replacing an existing manifest is atomic: a refused rename leaves the old bytes', () => {
+  // The create branch has published through writeAtomically since enrollment
+  // needed it; the branch that REPLACES a manifest -- the one every sync takes --
+  // was a plain writeFileSync. One file, two guarantees, and the weaker one on
+  // the path that overwrites rather than creates.
+  const dir = makeRepo({});
+  const p = buildProvenance({
+    root: dir, version: '9.9.9', profile: 'demo', tokens: {}, files: [],
+  });
+  writeProvenance(dir, p, { create: true });
+  const before = readFileSync(join(dir, PROVENANCE_FILE), 'utf8');
+
+  assert.throws(
+    () => writeProvenance(dir, { ...p, daftplate: '9.9.10' }, {
+      rename: () => { throw eperm(); },
+    }),
+    /open in another process/i,
+  );
+
+  assert.equal(readFileSync(join(dir, PROVENANCE_FILE), 'utf8'), before);
+  // No staging debris beside the target: the writer cleans the directory it made.
+  assert.deepEqual(readdirSync(dir), [PROVENANCE_FILE]);
+});
+
+test('an unparseable manifest names the file rather than surfacing a bare SyntaxError', () => {
+  const dir = makeRepo({ [PROVENANCE_FILE]: '{ "profile": "demo",\n' });
+
+  assert.throws(() => readProvenance(dir), (error) => {
+    assert.match(error.message, /\.daftplate\.json/);
+    return true;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// requiredSchema() -- #242 (FORGE-316). The write side of validateEntry's
+// ownership gates: what the ENTRIES need, never what occasioned the write.
+// ---------------------------------------------------------------------------
+
+const schemaEntry = (ownership) => ({
+  digest: `sha256:${'a'.repeat(64)}`,
+  layer: 'base',
+  mode: 'copied',
+  ownership,
+  ...(ownership === 'managed' ? {} : { templateDigest: `sha256:${'b'.repeat(64)}` }),
+});
+
+test('requiredSchema answers from the lowest schema every entry can be written under', () => {
+  assert.equal(requiredSchema({}), 1);
+  assert.equal(requiredSchema({ 'a.md': schemaEntry('managed') }), 1);
+  // Schema 1 states managed by ABSENCE and cannot say anything else, so a
+  // divergent entry needs 2 even though `declined` is what the bump is famous for.
+  assert.equal(requiredSchema({ 'a.md': schemaEntry('diverged') }), 2);
+  assert.equal(requiredSchema({ 'a.md': schemaEntry('declined') }), 3);
+});
+
+test('requiredSchema takes the maximum across every entry, not the last one it read', () => {
+  const files = {
+    'a.md': schemaEntry('declined'),
+    'b.md': schemaEntry('managed'),
+    'c.md': schemaEntry('diverged'),
+  };
+
+  // Key order is the trap: a fold that kept the last answer would say 2 here and
+  // publish a declined entry under a schema that refuses it.
+  assert.equal(requiredSchema(files), 3);
+  assert.equal(requiredSchema({ 'z.md': schemaEntry('managed'), 'a.md': schemaEntry('declined') }), 3);
+});
+
+test('requiredSchema refuses an unknown ownership rather than answering 1', () => {
+  // Nothing on the write path validates entries -- writeProvenance serializes
+  // what it is given -- so this is the last place that can say so before the
+  // bytes land. Answering 1 would strip the value and publish a manifest
+  // claiming daftplate owns bytes it does not.
+  assert.throws(
+    () => requiredSchema({ 'a.md': schemaEntry('borrowed') }),
+    /a\.md has an unknown ownership: "borrowed"/,
+  );
+  assert.throws(() => requiredSchema({ 'a.md': {} }), /unknown ownership: undefined/);
 });

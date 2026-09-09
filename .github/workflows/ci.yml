@@ -14,15 +14,55 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           persist-credentials: false
+      - name: Resolve the Node version this repository declares
+        id: node-version
+        run: node scripts/resolve-node-version.mjs >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020   # v7.0.0
         with:
-          node-version: '20'
+          node-version: ${{ steps.node-version.outputs.node-version }}
+      - name: Refuse a vendored copy of the engineering standards
+        run: |
+          # The producer checkout is exempt, and by shape rather than by name: a
+          # repo carrying the layer tree scaffold() composes from IS daftplate,
+          # where engineering-standards/ is the canonical source the pointer
+          # resolves to (ADR 0001) and not a copy of it. Without this branch the
+          # guard fails the one repository it was written in.
+          if [ -d base/files ] && [ -d profiles ]; then
+            echo "This checkout carries base/files/ and profiles/, so it produces"
+            echo "repositories rather than consuming the standards. Guard skipped."
+          elif git ls-files --error-unmatch engineering-standards >/dev/null 2>&1 ||
+            [ -n "$(git ls-files 'engineering-standards/*')" ]; then
+            echo "engineering-standards/ is tracked here. The standards are canonical" >&2
+            echo "in the daftplate checkout (ADR 0001); a copy goes stale silently." >&2
+            echo "Keep the CLAUDE.md pointer and docs/quick-ref-workflow.md instead." >&2
+            exit 1
+          fi
+      - name: Install locked dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "No package-lock.json — nothing to install."
+          fi
       - name: Test
         run: |
           if [ -f package.json ]; then
             npm test --if-present
           else
             echo "No package.json yet — nothing to test."
+          fi
+      - name: Check the roadmap
+        run: |
+          # Skipped rather than failed where the script is absent: a repo
+          # scaffolded before check-roadmap.mjs existed can pick up this workflow
+          # from sync-standards without the script, and a MODULE_NOT_FOUND there
+          # would be the workflow failing on its own upgrade path. The skip is
+          # printed, because a check that quietly does nothing is worse than one
+          # that fails (repo-standards §6.6.1).
+          if [ -f scripts/check-roadmap.mjs ]; then
+            node scripts/check-roadmap.mjs .
+          else
+            echo "No scripts/check-roadmap.mjs — re-run /sync-standards to pick it up."
           fi
 
   secrets:

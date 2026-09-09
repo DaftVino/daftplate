@@ -1,0 +1,833 @@
+{
+  "schemaVersion": 1,
+  "pages": [
+    {
+      "id": "A1",
+      "title": "Claude skills",
+      "subtitle": "A1 - what to invoke, and when",
+      "groups": [
+        {
+          "id": "start",
+          "title": "Start / steer / finish"
+        },
+        {
+          "id": "plan",
+          "title": "Plan / decide / review"
+        },
+        {
+          "id": "build",
+          "title": "Build / test / inspect"
+        },
+        {
+          "id": "ship",
+          "title": "Ship / deploy"
+        },
+        {
+          "id": "special",
+          "title": "Specialized"
+        }
+      ]
+    },
+    {
+      "id": "A2",
+      "title": "Codex plugins",
+      "subtitle": "A2 - installed and enabled only",
+      "groups": [
+        {
+          "id": "code",
+          "title": "Code / review / repository work",
+          "note": "Claude Code's /codex skill wraps the Codex CLI in three modes."
+        },
+        {
+          "id": "docs",
+          "title": "Docs / PDFs / spreadsheets / presentations",
+          "note": "Four installed plugins handle common office artifacts."
+        },
+        {
+          "id": "visual",
+          "title": "Browser / sites / visuals",
+          "note": "browser interacts; sites builds and hosts; visualize draws."
+        },
+        {
+          "id": "services",
+          "title": "Connected services",
+          "note": "None installed. Assume no mail, chat, design, or data access."
+        },
+        {
+          "id": "tools",
+          "title": "Special-purpose tools",
+          "note": "Reusable patterns and high-stakes decisions."
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "title": "Coding workflow",
+      "subtitle": "B - the loop, the scenarios, the tie-breakers",
+      "groups": [
+        {
+          "id": "loop",
+          "title": "B1 core loop"
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "title": "Profile map",
+      "subtitle": "C - pick one at scaffold time",
+      "groups": [
+        {
+          "id": "cards",
+          "title": "Profiles"
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "title": "Ship / release / deploy / publish",
+      "subtitle": "D - the highest-consequence end",
+      "groups": [
+        {
+          "id": "gates",
+          "title": "Gates"
+        }
+      ]
+    },
+    {
+      "id": "E",
+      "title": "Where work lives",
+      "subtitle": "E - one home each, no second tracker",
+      "groups": [
+        {
+          "id": "routes",
+          "title": "Routing"
+        }
+      ]
+    }
+  ],
+  "profiles": {
+    "app-monolith": {
+      "summary": "Client, TS service, and relational DB, shipped together.",
+      "adds": "Migrations own schema; adds architecture/ and database/.",
+      "rule": "Keep repo skills repo-only; never install them user-level."
+    },
+    "content-library": {
+      "summary": "Prompts, playbooks, and templates curated as the product.",
+      "adds": "Frontmatter items under library/<category>/<item>.md.",
+      "rule": "Generate docs/library-index.md; never hand-edit it."
+    },
+    "design-vault": {
+      "summary": "Design and worldbuilding vault; its documents are the product.",
+      "adds": "Obsidian, stem-based [[wikilinks]], seven docs/ buckets.",
+      "rule": "Edit in Obsidian, version in git, keep it agent-readable."
+    },
+    "gas-webapp": {
+      "summary": "Apps Script web app with Code.gs and HTML templates.",
+      "adds": "Push and deploy with clasp; root appsscript.json; V8.",
+      "rule": "/exec is production, not /dev; archive stale deployments."
+    },
+    "local-tool": {
+      "summary": "Local CLI or scripts: no server, browser, or deployment.",
+      "adds": "No extra step; pass npm test and run the command.",
+      "rule": "ESM .mjs only; no build tools and no dependencies."
+    },
+    "office-automation": {
+      "summary": "Excel software in .xlsm: payroll, dashboards, or reporting.",
+      "adds": "Export VBA; the .xlsm artifact itself contains the code.",
+      "rule": "Git sees code only after export; skip it and lose the diff."
+    },
+    "userscript": {
+      "summary": "Browser script injected by a userscript manager.",
+      "adds": "Release the tagged .user.js itself; no build and no host.",
+      "rule": "One root .user.js with metadata; never read it whole."
+    },
+    "web-app": {
+      "summary": "Public site or marketing app, static-first on an edge host.",
+      "adds": "A static-first framework, a src/ tree, and a build step.",
+      "rule": "Host owns env config; verify the live URL after deploy."
+    }
+  },
+  "selected": [
+    {
+      "key": "claude:orient",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use when starting or resuming a repo."
+    },
+    {
+      "key": "claude:brief",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use when you want terse answers."
+    },
+    {
+      "key": "claude:curious",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use when more clarifying questions would help."
+    },
+    {
+      "key": "claude:insist",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use when every open question must block."
+    },
+    {
+      "key": "claude:handoff",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use when ending a phase with state and next reads."
+    },
+    {
+      "key": "claude:continuum",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use when a fresh chat needs a launch prompt."
+    },
+    {
+      "key": "claude:anchor",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use before /compact to keep one subject alive."
+    },
+    {
+      "key": "claude:deliberate",
+      "page": "A1",
+      "group": "plan",
+      "summary": "Use when a disputed plan needs three viewpoints."
+    },
+    {
+      "key": "claude:crit",
+      "page": "A1",
+      "group": "plan",
+      "summary": "Use when judging design from inspected evidence."
+    },
+    {
+      "key": "claude:stop-slop",
+      "page": "A1",
+      "group": "plan",
+      "summary": "Use when prose has obvious AI habits."
+    },
+    {
+      "key": "claude:code-map",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use to index symbols in large source files."
+    },
+    {
+      "key": "claude:new-project",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use to scaffold a known daftplate project type."
+    },
+    {
+      "key": "claude:enroll",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use to bring an existing repo under daftplate."
+    },
+    {
+      "key": "claude:standards-change",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use to record a deliberate standards exception."
+    },
+    {
+      "key": "claude:sync-standards",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use to update a scaffold without overwrites."
+    },
+    {
+      "key": "claude:audit",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use to test whether the tests would catch a mutant."
+    },
+    {
+      "key": "claude:gas-deploy",
+      "page": "A1",
+      "group": "ship",
+      "summary": "Use to deploy a clasp Apps Script web app."
+    },
+    {
+      "key": "claude:publish",
+      "page": "A1",
+      "group": "ship",
+      "summary": "Use to export daftplate or daftkit publicly."
+    },
+    {
+      "key": "claude:diagram",
+      "page": "A1",
+      "group": "special",
+      "summary": "Use to make editable Excalidraw and Mermaid repo maps."
+    },
+    {
+      "key": "claude:slides",
+      "page": "A1",
+      "group": "special",
+      "summary": "Use to build a strategic HTML presentation."
+    },
+    {
+      "key": "claude:gstack-codex",
+      "label": "/codex",
+      "page": "A2",
+      "group": "code",
+      "summary": "Review, challenge, or consult independently."
+    },
+    {
+      "key": "codex:documents@openai-primary-runtime:documents",
+      "page": "A2",
+      "group": "docs",
+      "summary": "Edit Word files; redline, comment, and verify layout."
+    },
+    {
+      "key": "codex:pdf@openai-primary-runtime:pdf",
+      "page": "A2",
+      "group": "docs",
+      "summary": "Read, create, fill, render, and verify PDFs."
+    },
+    {
+      "key": "codex:presentations@openai-primary-runtime:presentations",
+      "page": "A2",
+      "group": "docs",
+      "summary": "Create or edit PowerPoint and Slides decks."
+    },
+    {
+      "key": "codex:browser@openai-bundled:control-in-app-browser",
+      "label": "browser",
+      "page": "A2",
+      "group": "visual",
+      "summary": "Interact with pages and test local sites."
+    },
+    {
+      "key": "codex:visualize@openai-bundled:visualize",
+      "page": "A2",
+      "group": "visual",
+      "summary": "Make charts, maps, simulators, and tools."
+    },
+    {
+      "key": "codex:template-creator@openai-primary-runtime:template-creator",
+      "label": "template-creator",
+      "page": "A2",
+      "group": "tools",
+      "summary": "Create reusable skills from reference artifacts."
+    },
+    {
+      "key": "profile:app-monolith:architecture-docs",
+      "page": "C",
+      "group": "cards",
+      "summary": "Keep the architecture document true to the code."
+    },
+    {
+      "key": "profile:app-monolith:feature-flow",
+      "page": "C",
+      "group": "cards",
+      "summary": "Trace a feature end to end before changing it."
+    },
+    {
+      "key": "profile:app-monolith:domain-module",
+      "page": "C",
+      "group": "cards",
+      "summary": "Add a domain module behind its own boundary."
+    },
+    {
+      "key": "profile:app-monolith:database-schema",
+      "page": "C",
+      "group": "cards",
+      "summary": "Change schema through a migration, never in place."
+    },
+    {
+      "key": "profile:app-monolith:architecture-audit",
+      "page": "C",
+      "group": "cards",
+      "summary": "Audit layering and cross-domain imports."
+    }
+  ],
+  "families": [
+    {
+      "key": "claude:gstack-context-family",
+      "label": "gstack context family",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use to save or restore working context.",
+      "members": [
+        "claude:gstack-context-save",
+        "claude:gstack-context-restore"
+      ]
+    },
+    {
+      "key": "claude:gstack-safety-family",
+      "label": "gstack safety family",
+      "page": "A1",
+      "group": "start",
+      "summary": "Use /careful, /freeze, /guard, or /unfreeze.",
+      "members": [
+        "claude:gstack-careful",
+        "claude:gstack-freeze",
+        "claude:gstack-guard",
+        "claude:gstack-unfreeze"
+      ]
+    },
+    {
+      "key": "claude:gstack-spec-family",
+      "label": "gstack spec family",
+      "page": "A1",
+      "group": "plan",
+      "summary": "Use /spec or /office-hours to clarify intent.",
+      "members": [
+        "claude:gstack-spec",
+        "claude:gstack-office-hours"
+      ]
+    },
+    {
+      "key": "claude:gstack-plan-family",
+      "label": "gstack plan family",
+      "page": "A1",
+      "group": "plan",
+      "summary": "Use /autoplan or CEO, design, eng, DX review.",
+      "members": [
+        "claude:gstack-autoplan",
+        "claude:gstack-plan-ceo-review",
+        "claude:gstack-plan-design-review",
+        "claude:gstack-plan-devex-review",
+        "claude:gstack-plan-eng-review",
+        "claude:gstack-plan-tune"
+      ]
+    },
+    {
+      "key": "claude:gstack-review-family",
+      "label": "gstack review family",
+      "page": "A1",
+      "group": "plan",
+      "summary": "Use /review or /cso before landing.",
+      "members": [
+        "claude:gstack-review",
+        "claude:gstack-cso",
+        "claude:gstack-devex-review",
+        "claude:gstack-health"
+      ]
+    },
+    {
+      "key": "claude:gstack-qa-family",
+      "label": "gstack QA family",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use /investigate or /qa for proof.",
+      "members": [
+        "claude:gstack-investigate",
+        "claude:gstack-qa",
+        "claude:gstack-qa-only",
+        "claude:gstack-benchmark",
+        "claude:gstack-benchmark-models"
+      ]
+    },
+    {
+      "key": "claude:gstack-browser-family",
+      "label": "gstack browser family",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use /browse or /scrape on a live UI.",
+      "members": [
+        "claude:gstack-browse",
+        "claude:gstack-connect-chrome",
+        "claude:gstack-open-gstack-browser",
+        "claude:gstack-pair-agent",
+        "claude:gstack-scrape",
+        "claude:gstack-setup-browser-cookies",
+        "claude:gstack-skillify"
+      ]
+    },
+    {
+      "key": "claude:gstack-ios-family",
+      "label": "gstack iOS family",
+      "page": "A1",
+      "group": "build",
+      "summary": "Use its QA, fix, review, sync, and clean tools.",
+      "members": [
+        "claude:gstack-ios-clean",
+        "claude:gstack-ios-design-review",
+        "claude:gstack-ios-fix",
+        "claude:gstack-ios-qa",
+        "claude:gstack-ios-sync"
+      ]
+    },
+    {
+      "key": "claude:gstack-ship-family",
+      "label": "gstack ship family",
+      "page": "A1",
+      "group": "ship",
+      "summary": "Use /ship or /land-and-deploy to deliver.",
+      "members": [
+        "claude:gstack-ship",
+        "claude:gstack-land-and-deploy",
+        "claude:gstack-landing-report",
+        "claude:gstack-setup-deploy",
+        "claude:gstack-canary"
+      ]
+    },
+    {
+      "key": "claude:design-suite",
+      "label": "design suite",
+      "page": "A1",
+      "group": "special",
+      "summary": "Use /design, /impeccable, or /ui-styling.",
+      "members": [
+        "claude:design",
+        "claude:design-system",
+        "claude:impeccable",
+        "claude:ui-styling",
+        "claude:ui-ux-pro-max",
+        "claude:brand",
+        "claude:banner-design"
+      ]
+    },
+    {
+      "key": "claude:gstack-design-family",
+      "label": "gstack design family",
+      "page": "A1",
+      "group": "special",
+      "summary": "Use /design-consultation or /design-review.",
+      "members": [
+        "claude:gstack-design-consultation",
+        "claude:gstack-design-html",
+        "claude:gstack-design-review",
+        "claude:gstack-design-shotgun",
+        "claude:gstack-diagram"
+      ]
+    },
+    {
+      "key": "claude:gstack-documents-family",
+      "label": "gstack documents family",
+      "page": "A1",
+      "group": "special",
+      "summary": "Use /document-generate or /make-pdf.",
+      "members": [
+        "claude:gstack-document-generate",
+        "claude:gstack-document-release",
+        "claude:gstack-make-pdf"
+      ]
+    },
+    {
+      "key": "claude:gstack-knowledge-family",
+      "label": "gstack knowledge family",
+      "page": "A1",
+      "group": "special",
+      "summary": "Use /learn, /retro, or the gbrain tools.",
+      "members": [
+        "claude:gstack-learn",
+        "claude:gstack-retro",
+        "claude:gstack-setup-gbrain",
+        "claude:gstack-sync-gbrain"
+      ]
+    },
+    {
+      "key": "codex:spreadsheets@openai-primary-runtime:workbooks",
+      "label": "spreadsheets",
+      "page": "A2",
+      "group": "docs",
+      "summary": "Build or analyze workbooks; drive live Excel too.",
+      "members": [
+        "codex:spreadsheets@openai-primary-runtime:spreadsheets",
+        "codex:spreadsheets@openai-primary-runtime:excel-live-control"
+      ]
+    },
+    {
+      "key": "codex:sites@openai-bundled:sites",
+      "label": "sites",
+      "page": "A2",
+      "group": "visual",
+      "summary": "Build, version, host, and deploy websites.",
+      "members": [
+        "codex:sites@openai-bundled:sites-building",
+        "codex:sites@openai-bundled:sites-hosting"
+      ]
+    }
+  ],
+  "omitted": [
+    {
+      "key": "claude:gstack",
+      "reason": "Router for the gstack suite; it dispatches to the families printed above rather than doing work itself."
+    },
+    {
+      "key": "claude:_gstack-command",
+      "reason": "Internal router entry point for the gstack suite; never invoked by name."
+    },
+    {
+      "key": "claude:gstack-upgrade",
+      "reason": "Maintenance of the gstack pack itself, not part of the coding loop."
+    },
+    {
+      "key": "codex:personal:hatch-pet",
+      "reason": "Personal Codex skill root, not a plugin row; page A2 prints installed and enabled plugins only."
+    }
+  ],
+  "workflow": {
+    "loop": [
+      "Orient",
+      "issue/spec",
+      "plan",
+      "plan review",
+      "worktree",
+      "failing test",
+      "implement",
+      "mid-flight review",
+      "security/QA",
+      "final review",
+      "close/release",
+      "deploy",
+      "handoff/learn"
+    ],
+    "callouts": [
+      "No code before a failing test.",
+      "No non-trivial implementation before an approved plan review.",
+      "Never commit to main.",
+      "/ship does NOT create the git tag or the GitHub Release.",
+      "/handoff ends a phase; /continuum prepares a new chat."
+    ],
+    "scenarios": [
+      {
+        "when": "Bug/unexplained failure",
+        "path": "/investigate -> failing test -> fix -> /review ->",
+        "closer": "/ship"
+      },
+      {
+        "when": "Tiny isolated change",
+        "path": "issue/PR plan -> worktree -> failing test -> implement -> /review ->",
+        "closer": "PR merged"
+      },
+      {
+        "when": "Normal feature",
+        "path": "brainstorming -> issue/spec -> plan -> /plan-eng-review -> TDD -> /review ->",
+        "closer": "/ship"
+      },
+      {
+        "when": "UI change",
+        "path": "design consultation -> plan/design review -> TDD -> /crit -> /qa -> /review ->",
+        "closer": "deploy verified"
+      },
+      {
+        "when": "Architecture/schema change",
+        "path": "issue -> plan + ADR -> /plan-eng-review -> TDD -> security audit -> /review ->",
+        "closer": "deploy verified"
+      },
+      {
+        "when": "Contested decision",
+        "path": "/deliberate -> decision record -> plan -> /plan-eng-review -> implement -> /review ->",
+        "closer": "/ship"
+      },
+      {
+        "when": "Design critique",
+        "path": "/crit -> revise -> /qa when behavior matters ->",
+        "closer": "accepted artifact"
+      },
+      {
+        "when": "Release/deploy",
+        "path": "/ship -> human merge -> annotated tag -> GitHub Release -> deploy ->",
+        "closer": "production verified"
+      },
+      {
+        "when": "Resume after break",
+        "path": "/orient -> handoff log -> continue named phase -> phase closer ->",
+        "closer": "/handoff committed"
+      },
+      {
+        "when": "New repository",
+        "path": "/new-project -> read generated CLAUDE.md -> setup repo -> first issue ->",
+        "closer": "initial PR merged"
+      }
+    ],
+    "overlaps": [
+      {
+        "overlap": "Product idea vs validation",
+        "winner": "brainstorming",
+        "exception": "/office-hours only for validation"
+      },
+      {
+        "overlap": "Debugging methods",
+        "winner": "/investigate",
+        "exception": "No second debugging skill in the same pass"
+      },
+      {
+        "overlap": "Mid-flight vs final review",
+        "winner": "requesting-code-review, then /review",
+        "exception": "Never both in one review pass"
+      },
+      {
+        "overlap": "Close branch",
+        "winner": "/ship for a versioned product",
+        "exception": "finishing-a-development-branch for a quick task"
+      },
+      {
+        "overlap": "Session transfer",
+        "winner": "/handoff",
+        "exception": "/continuum only when a new chat must start"
+      },
+      {
+        "overlap": "Visual critique vs visual QA",
+        "winner": "/crit judges design quality",
+        "exception": "/qa proves behavior in the running surface"
+      },
+      {
+        "overlap": "Plan review vs contested call",
+        "winner": "/plan-eng-review",
+        "exception": "/deliberate only when options are genuinely contested"
+      }
+    ]
+  },
+  "release": {
+    "sections": [
+      {
+        "title": "Close the branch",
+        "lead": "Choose one closer after the work is complete.",
+        "items": [
+          "/ship for a versioned product OR finishing-a-development-branch for a quick task",
+          "Tests green",
+          "Final review complete",
+          "git status clean",
+          "PR opened against main"
+        ],
+        "commands": [],
+        "stop": "STOP FOR HUMAN MERGE. Agent cannot merge."
+      },
+      {
+        "title": "Cut the release",
+        "lead": "/ship CREATES ONLY 1 + 2. YOU MUST FINISH 3 + 4.",
+        "items": [
+          "1. Version bump",
+          "2. CHANGELOG entry",
+          "3. Annotated vX.Y.Z tag",
+          "4. GitHub Release"
+        ],
+        "commands": [
+          "git tag -a vX.Y.Z -m \"vX.Y.Z\"",
+          "git push origin vX.Y.Z",
+          "gh release create vX.Y.Z --title \"vX.Y.Z\" --notes-file <notes>"
+        ],
+        "stop": null
+      },
+      {
+        "title": "Deploy and verify",
+        "lead": "Use only the active profile's deploy command.",
+        "items": [
+          "app-monolith, web-app -> /land-and-deploy",
+          "gas-webapp -> /gas-deploy",
+          "other five profiles -> n/a",
+          "Name rollback or stop point before deploy",
+          "Verify the live URL, deployment ID, or opened workbook"
+        ],
+        "commands": [],
+        "stop": "Command success is NOT production verification."
+      },
+      {
+        "title": "Publish a public export",
+        "lead": "Regenerate public from private source; never edit the export directly.",
+        "items": [
+          "Private main clean; tests green",
+          "Dry-run, then actually READ the entire file list",
+          "Build a fresh export; scan it independently with gitleaks",
+          "Remove stale public files deliberately - export never deletes",
+          "Open a PR"
+        ],
+        "commands": [],
+        "stop": "STOP FOR HUMAN MERGE."
+      }
+    ],
+    "stopBand": "No tag without a GitHub Release - no deploy without production verification - no public export without dry-run + independent secret scan",
+    "footnote": "Checklist only - use the active profile's workflow for execution details."
+  },
+  "destinations": {
+    "decisionPath": [
+      {
+        "question": "Must it be tracked and closed?",
+        "home": "Issue"
+      },
+      {
+        "question": "Explains how non-trivial work will be built?",
+        "home": "Design doc"
+      },
+      {
+        "question": "Must the decision outlive this change?",
+        "home": "ADR"
+      },
+      {
+        "question": "Is it implementation or proof?",
+        "home": "PR + tests"
+      },
+      {
+        "question": "Is it phase-transfer state?",
+        "home": "Handoff log"
+      }
+    ],
+    "rows": [
+      {
+        "information": "Bug, task, enhancement, or idea to track",
+        "home": "GitHub Issue"
+      },
+      {
+        "information": "Investigation notes and new evidence",
+        "home": "Comment on the owning issue"
+      },
+      {
+        "information": "Non-trivial implementation approach, before work",
+        "home": "docs/designs/YYYY-MM-DD-slug.md"
+      },
+      {
+        "information": "Lasting, expensive-to-reverse decision",
+        "home": "docs/adr/NNNN-slug.md"
+      },
+      {
+        "information": "Expensive contested review and its falsifiers",
+        "home": "docs/records/deliberate/YYYY-MM-DD-slug.md"
+      },
+      {
+        "information": "Phase-end state and next read manifest",
+        "home": "Active design doc's ## Handoff log"
+      },
+      {
+        "information": "New-chat launch prompt",
+        "home": "docs/designs/next-session-prompt.md (temporary)"
+      },
+      {
+        "information": "Implementation and fix",
+        "home": "Pull request with \"Fixes #N\""
+      },
+      {
+        "information": "Executable proof",
+        "home": "tests/ in the same pull request"
+      },
+      {
+        "information": "Small change plan",
+        "home": "Pull request description"
+      },
+      {
+        "information": "Released user-visible change",
+        "home": "CHANGELOG.md plus tag and GitHub Release"
+      }
+    ],
+    "docsRule": "DOCS RULE: docs/ is flat except designs/, adr/, records/ and whatever the active profile's docs-subdirs adds.",
+    "stopRule": "No TODO files, no docs/bugs, no loose investigation notes, no second task tracker.",
+    "footnote": "One artifact, one canonical home. Link it; do not copy it."
+  },
+  "layout": {
+    "pageWidthIn": 11,
+    "pageHeightIn": 8.5,
+    "safeMarginIn": 0.4,
+    "titlePt": 27,
+    "headingPt": 18,
+    "bodyPt": 13,
+    "minBodyPt": 12,
+    "minFooterPt": 9.5,
+    "minLineHeight": 1.18,
+    "overflowTolerancePx": 2,
+    "maxLines": {
+      "A1": 2,
+      "A2": 2,
+      "B": 2,
+      "C": 3,
+      "D": 2,
+      "E": 2
+    },
+    "previewDpi": 150
+  }
+}

@@ -12,3 +12,17 @@ scratch/
 
 # subagent-driven-development scratch: ledgers, briefs, review packages
 .superpowers/
+
+# desk-guides generator: staging runs and the promoted output set. Generated
+# artifacts are never committed; the generator, its config and its tests are.
+tmp/
+output/
+
+# Editor workspace colours — a per-machine preference, not repo configuration
+.vscode/
+
+# `claude plugin eval` run output: scores, prompts, judge verdicts and a
+# self-contained HTML report, written per run under a timestamped directory. The
+# cases and their graders are committed; a run's results are a measurement of one
+# moment against a model that moves, and a committed one reads as a standing claim.
+evals/results/

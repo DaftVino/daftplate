@@ -53,6 +53,23 @@ otherwise.
 | `gas-webapp` | [clasp](https://github.com/google/clasp) | push and deploy Apps Script projects | `npm install -g @google/clasp`, then `clasp login` |
 | `web-app` | [Wrangler](https://github.com/cloudflare/workers-sdk) | deploy to Cloudflare Workers and Pages | `npm install -g wrangler` |
 
+### For the desk guides only
+
+These two are prerequisites of one command, `npm run desk-guides`, and of nothing
+else. They are deliberately **not** in `scripts/check-machine.mjs`: a `tier` there
+means "a machine of yours is misconfigured without this", and that is untrue for
+someone who cloned the public export to scaffold a repo. Skip both unless you are
+regenerating the printable cork-board guides.
+
+| Tool | For | Install |
+|---|---|---|
+| Microsoft Edge or Google Chrome | measuring real page geometry, and printing HTML to PDF | Edge ships with Windows; otherwise install either browser |
+| [Poppler](https://poppler.freedesktop.org/) (`pdfinfo`, `pdftoppm`) | reopening each PDF to confirm one Letter-landscape page, and rendering PNG previews | Windows: `winget install oschwartz10612.Poppler` · macOS: `brew install poppler` · Linux: `sudo apt install poppler-utils` |
+
+The generator probes for them itself and refuses with the install command above
+when either is missing. It never installs anything. On Windows, reopen the shell
+after installing Poppler so the new `PATH` is picked up.
+
 ### Check the machine
 
 Once `node` and a checkout exist, stop reading tables and let the second pass do it:
@@ -78,13 +95,15 @@ so the two cannot drift apart silently.
 
 ## Install the skills
 
-`skills/<name>/SKILL.md` in this repo is the source of truth for every user-level skill (ADR 0002). `scripts/install-skills.mjs` copies each skill directory into `~/.claude/skills/<name>/`:
+`skills/<name>/SKILL.md` in this repo is the source of truth for every user-level skill (ADR 0002). `scripts/install-skills.mjs` installs the whole checkout as **one plugin** at `~/.claude/skills/daftplate/`, holding the plugin manifest and a `skills/<name>/` directory per skill — one owned subtree rather than a loose skill directory per name:
 
 ```
 node scripts/install-skills.mjs
 ```
 
-This copies over the top of whatever is already in `~/.claude/skills/` — it never deletes. That directory holds every other skill you use, so an unguarded delete keyed on this repo's contents would be an unacceptable blast radius (ADR 0002). A file removed from a skill's source here lingers in the installed copy until removed by hand; that's accepted, deliberately, over the alternative.
+This copies over the top of whatever is already in `~/.claude/skills/daftplate/` — it never deletes. Its parent, `~/.claude/skills/`, holds every other skill you use, so an unguarded delete keyed on this repo's contents would be an unacceptable blast radius (ADR 0002); the installer names any loose leftover directory it recognises and prints a removal command rather than running one. A file removed from a skill's source here lingers in the installed copy until removed by hand; that's accepted, deliberately, over the alternative.
+
+**Every input comes from the checkout containing the script**, so invoking it by path from anywhere works and is correct: `node X:/Projects/daftplate/scripts/install-skills.mjs` installs *daftplate's* skills and gate, not those of whatever repo you happen to be standing in. `cd`ing here first is still fine; it is no longer load-bearing. `--target` controls destinations only.
 
 Useful flags:
 
@@ -96,7 +115,7 @@ node scripts/install-skills.mjs --target <dir>      # install somewhere other th
 Output names each installed skill:
 
 ```
-installed 9 skill(s) to C:\Users\you\.claude\skills: brief, code-map, gas-deploy, handoff, new-project, orient, ...
+installed 22 skill(s) as the daftplate plugin at C:\Users\you\.claude\skills\daftplate: agent-fixer, agent-hunter, anchor, audit, brief, code-map, ...
 ```
 
 ### Record where this checkout lives
@@ -140,6 +159,34 @@ as a checkout there, which is the whole point of checking.
 A skill directory without a `SKILL.md` is skipped and reported on stderr — that's a malformed skill, not a failure of the installer.
 
 Editing the installed copy under `~/.claude/skills/` instead of the source in this repo's `skills/` is a bug: your change is silently overwritten on the next install.
+
+## Bootstrap a repository
+
+`setup-repo` is per-repo, not per-machine, and it installs **two** git hooks:
+
+```
+node scripts/setup-repo.mjs <repo>
+```
+
+- a **pre-commit** hook running `gitleaks git --staged`, per repo-standards §2.1 layer 1;
+- a **pre-push** hook enforcing `type/N-slug` branch names, per §4, which also refuses a direct push to `main`.
+
+Neither is overwritten if something is already at that path — pass `--force` to replace one deliberately. `--check` is doctor mode: it reports either hook missing and **installs nothing**.
+
+**Existing repositories need to re-run it.** A repo bootstrapped before the branch hook existed has only the pre-commit hook; `setup-repo` adds the second one without touching the first.
+
+The branch hook's one-push escape hatch is `DAFTPLATE_ALLOW_NONSTANDARD_BRANCH=1 git push`, and it prints a line on stderr when it fires.
+
+### Removing a vendored copy of the standards
+
+The pre-commit hook refuses a staged `engineering-standards/` path, and the base CI workflow refuses a tracked one — `--no-verify` walks past a local hook, so the merge barrier has to exist server-side too. Both **refuse and neither deletes**: CLAUDE.md #5 is absolute, and a tool that removed a directory to enforce a documentation rule would be destroying work.
+
+Removing an existing copy is a human job, and the two cases differ:
+
+- **Tracked** — read the copy's unique lines first and confirm none is wanted, then `git rm -r engineering-standards/` in an ordinary reviewed PR, add the `CLAUDE.md` pointer and `docs/quick-ref-workflow.md`, and keep the removal free of unrelated cleanup.
+- **Untracked** — confirm you are in the exact checkout you think you are, inventory the directory, then remove exactly `engineering-standards/` yourself.
+
+**Do not add a `.gitignore` rule for it.** An ignored copy stays on disk, never shows up in `git status`, and still misleads an agent that reads it as current — which is how one repo's stale copy survived long enough to be less than half the length of the real standard. The friction of a visible copy is the point; the barriers above stop it being *tracked* without hiding a local one.
 
 ## Verify the install
 

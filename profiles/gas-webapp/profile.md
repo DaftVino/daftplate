@@ -17,6 +17,7 @@ verify: npm test
 test: npm test
 deploy: /gas-deploy
 docs-subdirs: designs, adr
+roadmap: required
 ```
 
 ## Extra directories

@@ -21,9 +21,17 @@ One rule covers almost everything: **lowercase-kebab-case**. If you are about to
 | Design doc | `YYYY-MM-DD-slug.md` | `2026-07-01-fix-registry-cap.md` |
 | ADR | `NNNN-slug.md` | `0003-use-properties-service.md` |
 
-**Exceptions — canonical root files only.** UPPERCASE is reserved for the small set of files GitHub and the wider ecosystem treat specially: `README.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CLAUDE.md` / `AGENTS.md`. Nothing else in the repo gets uppercase names — no `ARCHITECTURE.md`, no `Logo/`. Architecture docs are `docs/architecture.md`.
+**Exceptions — two, both at the repository root.**
 
-**Slugs:** 2–5 words, hyphenated, no dates in branch names, no issue titles pasted verbatim. Optional but encouraged: prefix branch slug with the issue number (`fix/42-registry-cap`) so the branch is traceable without opening it.
+1. **Canonical files, enumerated.** UPPERCASE is reserved for the small set GitHub and the wider ecosystem treat specially: `README.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CLAUDE.md` / `AGENTS.md`. The list is closed.
+
+2. **Ecosystem tool files, by shape.** A root file whose name is an uppercase letter, then lowercase letters or digits, then a lowercase `file` — optionally followed by a lowercase-kebab variant suffix. `Dockerfile`, `Dockerfile.prod`, `Makefile`. These are not style choices: Docker looks up that exact name and finds no default without `-f`, so renaming one to satisfy a naming rule breaks the build. The rule is a shape rather than a list because an enumeration is wrong again the next time a convention appears.
+
+   The shape is deliberately narrower than "extensionless TitleCase", which would also admit a stray `Readme` beside a correct `README.md`. `DockerFile` and `Dockerfile.Prod` are violations. The cost, stated rather than hidden: an accidental `Readmefile` passes.
+
+Nothing else gets uppercase names — no `ARCHITECTURE.md`, no `TODOS.md`, no `Logo/`. Architecture docs are `docs/architecture.md`.
+
+**Slugs:** 2–5 words, hyphenated, no dates in branch names, no issue titles pasted verbatim. **A branch slug is prefixed with its issue number** — `fix/42-registry-cap`, not `fix/registry-cap` — so the branch is traceable without opening it. This used to read "optional but encouraged", which contradicted the non-negotiable gate requiring `type/N-slug`; §4 now says how it is enforced.
 
 ## 2. Required root files
 
@@ -85,6 +93,29 @@ read` unless it demonstrably needs more, and every `actions/checkout` sets
 by default, which leaves the repo credential in reach of every later step —
 including, in the case above, a third-party binary the job just downloaded.
 
+### 2.3 Baseline security controls
+
+This subsection sits under a heading that says "Required root files" because §2.1 and §2.2 already hold this repo's security rules, and splitting the cluster across two top-level sections would be worse than an imperfect heading.
+
+**Cyber Essentials assesses an organisation's devices, networks and cloud-service accounts. None of its five controls can be met by a standards document, and this section does not claim otherwise.** What follows are *repository analogues* of three of them, written as rules a repo can satisfy. **Firewalls and Malware protection have no repository expression at all** and are named here so nobody reads three-fifths of a scheme as the whole of it — which is the failure §5.1 exists to name, one level up.
+
+**1. Secure configuration.** §2.1 covers secret protection in three layers and the `.example` twin pattern; §2.2 covers CI least privilege. Added here: **no default or shared credential appears in any shipped config file.**
+
+**2. Security update management.**
+
+- **Dependabot alerts are enabled on every repo with a GitHub remote.** Alerts and `dependabot.yml` version updates are different mechanisms: alerts run off the dependency graph and involve that file not at all.
+- `dependabot.yml` **declares an ecosystem entry for every package manager the repo actually uses.** A repo with a `package.json` and no `npm` entry is a violation. A repo with no manifest adds no entry — an entry naming an absent manifest is itself a defect, and it trains people to ignore Dependabot.
+- Security updates the vendor rates **high or critical are applied within 14 days of the vendor releasing the update** — the vendor's release, not the advisory's publication. Where a vendor supplies no severity, high or critical means a **CVSS v3 base score of 7.0 or above**.
+- Software past **end of life is removed** from the repo's supported set. Segregation is the mechanism by which removal from scope is achieved, not an equal alternative that lets end-of-life software stay.
+
+**Enforcement, stated plainly.** This is prose, plus whatever `setup-repo --remote` enabled the last time a human pointed it at a repo. That is an opt-in step, not something scaffolding fires, so **the rule outruns its enforcement here**. A `verify-repo` ecosystem-coverage check is the next layer and is deliberately deferred rather than implied.
+
+**3. User access control.** **MFA is required on GitHub and on any host holding deploy credentials.** §2.2 covers CI least privilege. Branch protection on `main` is required by the §9 checklist — with the tier caveat `docs/architecture.md` records: protection and rulesets return 403 on a private repo on the free plan, which is not a permissions problem and is not offered in the Settings UI either. Where the plan forbids it, the substitute is a required CI check plus a stated intent to enable protection on visibility change, written the way §2.1 layer 2 writes its substitute.
+
+Cyber Essentials' user access control additionally covers, **among other requirements**, unique per-user accounts, an account-creation approval process, authenticating users before granting access, removing accounts no longer required, removing special access privileges when no longer required, separate admin accounts used only for admin tasks, and password policy. **A repository standard governs none of them.** The words "among other requirements" are deliberate: naming a closed set of five would reproduce the partial-coverage failure at a smaller scale.
+
+**Not covered, by name:** Firewalls, Malware protection, and the whole of the user-access-control list above. This section is not a conformance claim and no certification is being pursued.
+
 ## 3. Canonical folder structure
 
 Minimal template. Create folders only when there is content for them — empty scaffolding is noise.
@@ -111,6 +142,7 @@ repo-name/
 Rules of thumb:
 
 - `docs/` is flat except for `designs/`, `adr/` and `records/`. Don't create `docs/bugs/`, `docs/fixes/`, `docs/plans/`, `docs/tests/` — each of those has a proper home (§6). A profile's `docs-subdirs` adds to those three; it never replaces them.
+- **One further exception, opt-in and never a default: a stable *content class* whose flattening would make the namespace misleading.** Business or market material, or small reader-facing example files, are the cases this exists for. Three conditions, all required: the directory names a durable class of content rather than a stage of work; the repo declares it explicitly through `docs-subdirs` or `--docs-subdirs=`, so nothing is blessed by convention; and the repo records the local reason in an ADR. **This is not a loophole for `bugs/`, `fixes/` or `plans/`** — those name where work *is*, not what content *is*, and they stay prohibited however they are declared. Nothing is added to the global defaults: a class that has earned an exception in one repo has earned it in one repo.
 - One concept, one file. A troubleshooting guide and a setup guide are two files, not sections of a mega-doc.
 - Media goes in `assets/`, not a capitalized `Logo/` at root.
 
@@ -128,6 +160,14 @@ Rules of thumb:
 | `refactor/` | Code change, no behavior change |
 | `chore/` | Tooling, deps, config, CI |
 | `test/` | Adding or fixing tests only |
+
+**The full form is `type/N-slug`**, where `N` is the GitHub issue number with no leading zero: `fix/62-scaffold-dest-guard`. The number is what makes the PR-to-issue link visible before a PR body exists — and on the §6.5.1 board variant, where GitHub and Linear sequences drift, the branch name is the one place the GitHub number is unambiguous.
+
+**Enforced by a pre-push hook**, installed by `setup-repo` alongside the gitleaks pre-commit hook. It reads the push's ref lines from stdin rather than the current branch, because a push can target a differently named remote ref or a branch that is not checked out. It refuses a direct push to `main` or `master`, ignores tags and deletions, and rejects the whole push if any one ref is misnamed.
+
+The escape hatch is `DAFTPLATE_ALLOW_NONSTANDARD_BRANCH=1 git push`, for one push, and it prints a line on stderr saying it fired. It is named rather than silent for a reason that applies to every gate: one with no exit gets deleted wholesale the first time it is wrong, and then nothing is enforced at all.
+
+An existing repository picks the hook up by re-running `setup-repo`; `--check` reports it missing without installing it.
 
 **Commits — Conventional Commits:** `type(scope)?: imperative summary` in lowercase, ≤72 chars, body optional but required when the *why* isn't obvious.
 
@@ -276,11 +316,13 @@ Tasks are tracked on a GitHub Project. The rules exist so the board stays a *vie
 
 ### 6.5.1 Variant: boards on Linear
 
-A repo may move its board from GitHub Projects to Linear when phased work with real dependencies, milestone structure, or cross-repo visibility outgrows Projects. The precedent and full rationale is daft-cal's ADR 0016; a repo adopting this variant records its own ADR pointing there.
+A repo may move its board from GitHub Projects to Linear when phased work with real dependencies, milestone structure, or cross-repo visibility outgrows Projects. The precedent and full rationale is recorded in the ADR of the repo that piloted the variant; a repo adopting it records its own ADR pointing there.
 
 The three §6.5 anchors transpose, not lapse: one Linear Project per repository, never cross-repo; the GitHub issue stays canonical for *existence* while Linear is canonical for *state*; and no-draft-cards becomes *nothing tracked may live only in a Linear document or project description*. On top of them: **creation is always GitHub** (`gh issue create` from templates — on the free plan, Linear→GitHub creation sync works for exactly one repo, so a GitHub-creation process is the only one every repo can copy; keep that sync off even where it would work). Issues are **dressed in Linear within 24h**: priority (Urgent/High/Medium = P1/P2/P3 of rule 6; Low = parked), milestone, blocking relations — an undressed issue is the variant failing. **Milestones mirror the repo's ROADMAP sections**, per §6.6. **Done requires evidence attached as a comment** (§6.6's ladder), and PRs close via `Fixes #N` with the GitHub number — identifier sequences drift and are never computed from each other. Known bounds, watched at the repo's weekly triage: 250-issue sync ceiling (close-and-archive before ~200), 10MB attachment sync limit (large artifacts go in the repo, linked from the issue).
 
-**Name an issue by both identifiers — `#N (FORGE-M)` — wherever a human will read the prose and act on it.** In scope: PR bodies, review comments naming follow-up work, issue bodies and comments, handoff notes, session prompts, status reports, and commit bodies. A commit body squash-merged onto `main` (§4) is the one surface a bare reference can never be repaired on later, which is the argument for pairing it at write time rather than for exempting it. The order is fixed, GitHub number first, never `FORGE-M (#N)`: one form stays greppable, and it is the string `gh issue view`, `gh` search and the `Fixes` footer already key on. **Qualify the GitHub half as `owner/repo#N` whenever the issue lives in a repository other than the one the prose lives in.** A bare `#N` resolves against whatever repository the reader is standing in, and one Linear team serving several repositories makes that collide as a matter of course rather than as bad luck — measured 2026-08-22 in this workspace, `#130` in one repository is `FORGE-224` while `#130` in another is `FORGE-223`, two live issues sharing a number and one `FORGE` id apart. Within its own repository a reference stays bare, which is also what GitHub renders correctly; the moment it crosses one, `gh issue view 130` run in the wrong place answers confidently and wrongly. The exception is **act-scoped, not time-scoped** — prose written in the same tool-call sequence as the `gh issue create` that produced the issue cites the bare number, because the sync has not yet minted a `FORGE-*` id; every later reference to that issue is expected to carry both, the id being a title search away. The **`Fixes #N` footer and the commit summary line are untouched**: the footer is machine-parsed and stays the bare GitHub number, §4.1 already bans issue references from the summary, and this clause reaches body prose only. **Nothing checks it.** Only two of those surfaces have any committed form (a PR body, a `## Handoff log` entry), and a partial check nobody reads as partial becomes evidence the convention holds everywhere — so this is the fifth clause here carried by convention, beside creation-is-GitHub, the 24h dressing rule, milestones mirroring the roadmap, and Done requiring evidence.
+**Name an issue by both identifiers — `#N (FORGE-M)` — wherever a human will read the prose and act on it.** In scope: PR bodies, review comments naming follow-up work, issue bodies and comments, handoff notes, session prompts, status reports, and commit bodies. A commit body squash-merged onto `main` (§4) is the one surface a bare reference can never be repaired on later, which is the argument for pairing it at write time rather than for exempting it. The order is fixed, GitHub number first, never `FORGE-M (#N)`: one form stays greppable, and it is the string `gh issue view`, `gh` search and the `Fixes` footer already key on. **Qualify the GitHub half as `owner/repo#N` whenever the issue lives in a repository other than the one the prose lives in.** A bare `#N` resolves against whatever repository the reader is standing in, and one Linear team serving several repositories makes that collide as a matter of course rather than as bad luck — measured 2026-08-22 in this workspace, `#130` in one repository is `FORGE-224` while `#130` in another is `FORGE-223`, two live issues sharing a number and one `FORGE` id apart. Within its own repository a reference stays bare, which is also what GitHub renders correctly; the moment it crosses one, `gh issue view 130` run in the wrong place answers confidently and wrongly. The exception is **act-scoped, not time-scoped** — prose written in the same tool-call sequence as the `gh issue create` that produced the issue cites the bare number, because the sync has not yet minted a `FORGE-*` id; every later reference to that issue is expected to carry both, the id being a title search away. The **`Fixes #N` footer and the commit summary line are untouched**: the footer is machine-parsed and stays the bare GitHub number, §4.1 already bans issue references from the summary, and this clause reaches body prose only. **Nothing checks it.** Only two of those surfaces have any committed form (a PR body, a `## Handoff log` entry), and a partial check nobody reads as partial becomes evidence the convention holds everywhere — so this is the fifth clause here carried by convention, beside creation-is-GitHub, the 24h dressing rule, milestones mirroring the roadmap, and Done requiring evidence. The clause that follows is the section's sixth and the only one with any enforcement at all, and it is partial — which §6.6.1 states rather than leaving to be discovered.
+
+**Never write a closing keyword adjacent to an issue number except as an actual footer.** GitHub's auto-close parser ignores code spans, block quotes and negation — a body saying a footer *would have been wrong* still closes the issue, and a sentence warning about the trap springs it. To write about one, break the token: put the keyword and the number in separate spans joined by an explicit `+`, or name the issue alone and describe the keyword in words. This reaches every surface in the paragraph above, and it is the one clause here whose violation is **silent** — no CI signal, no review comment, no diff, and at review the rendered body shows a code span rather than a footer. It selects for the issues that can least afford it: you only write carefully about a footer when there is a reason to be careful. Measured twice in this workspace, both times launch-pad prose copied verbatim into a PR body, the second closing a `human-only` row that blocked a deploy. Recorded as **ADR 0012**, which also carries the falsifier: if GitHub ships parser behaviour exempting code spans or block quotes, the clause narrows to unformatted prose — the current behaviour was observed directly rather than read from documentation. **This one is checked, on one surface of several**: `skills/continuum/scripts/validate-prompt.mjs` refuses it in the launch pad, which is where both occurrences entered; §6.6.1 records what that check does not reach.
 
 Creating the project needs the `project` scope on the `gh` token: `gh auth refresh -s project`.
 
@@ -288,9 +330,31 @@ Creating the project needs the `project` scope on the `gh` token: `gh auth refre
 
 Every claim of completeness names a rung on this ladder: `specified → unit-tested → persisted → wired → real-provider-proven → journey-accepted → beta-ready`. A handoff note, issue closure, or plan that says "complete" without naming the rung is malformed. Closing an issue at `journey-accepted` or above requires the evidence attached as a comment — a test run, a command transcript, a screenshot of the real journey; green unit tests alone close nothing above `unit-tested`.
 
-App-profile repos additionally keep a **ROADMAP.md at root**: the repo's only live state document, sectioned Now / Next / Later (plus a parked list), with each Now/Next row naming the evidence that closes it. Session handoffs go to issue comments; next-session-prompt files and standalone remaining-work docs are forbidden — they multiply, go stale, and get read anyway. Plans in `docs/designs/` still follow §6.2; the ROADMAP is state, not planning.
+**An app-profile repo keeps a ROADMAP.md at root.** Which repos those are is not a judgement call: a repo is app-profile when the profile that produced it declares `roadmap: required` in the fenced ` ```profile ` block of `profiles/<type>/profile.md` — `app-monolith`, `web-app`, `gas-webapp` and `userscript`. The test the classification applies is *does anyone outside this repo depend on it shipping*, which is why `userscript` is in the list despite having no deploy step and why the existing `deploy:` key was rejected as a proxy for it. The other four profiles declare `roadmap: optional`; a profile declaring neither is a violation `verify-templates` reports, and a value other than those two is a violation rather than a default.
 
-Repos with a product surface also declare a **charter** (target user, wedge, non-goals) — in the ROADMAP's standing-decisions block or an ADR — and `writing-plans` must cite the charter line a plan serves. A plan serving no line is rejected at review, which is the moment scope creep becomes visible instead of retrospective.
+The template is `base/files/ROADMAP.md` and it ships to **every** scaffolded repo. The meta key governs the requirement to keep one, not the copy: under `optional`, deleting the file is a correct first act; under `required`, it is the repo's only live state document.
+
+Its shape. `## Now` and `## Next` are tables of `Item | Closes when | Rung`, where the rung is one of the seven above and the middle cell names the evidence that closes the row, never the activity that fills it. `## Now` holds at most five rows. `## Later` is a horizon, `## Parked` is what was deliberately dropped, `## Standing decisions` holds the rulings a reader must not relitigate — the ADRs in force, the doc of record, and each accepted deviation from this document — and `## Standing gates` holds the duties that never close — dependency alerts triaged, secrets rotated, a restore actually performed, access reviewed — each row naming its cadence and the date it was last verified, because a gate with no date is a claim and not evidence, which is the argument this section already makes about closing an issue without naming a rung. Exactly one line beginning `Board:` survives: the template carries both the §6.5 GitHub Projects form and the §6.5.1 Linear form and instructs the adopter to delete the other, because reading the two side by side at the moment the file is open is how the split gets taught. No `Updated:` line and no owner column — `git log -1 -- ROADMAP.md` and `git blame` answer both and cannot go stale, which a hand-stamped date always does. No size or estimate column: §6.5 rule 8 bans it on the board, and a roadmap that reintroduces it puts the two surfaces back into disagreement.
+
+Session handoffs go to issue comments. Standalone remaining-work docs are forbidden — they multiply, go stale, and get read anyway. Exactly one launch-pad file is permitted, at `docs/designs/next-session-prompt.md`: `/continuum` writes it, the session that picks it up deletes it, and it must validate clean against `skills/continuum/scripts/validate-prompt.mjs` with the branch, issue and path context supplied — **as its reader will stand, not as its writer did.** Every rule in that validator is time-invariant except the branch check, and the launch pad is the one artifact written on a feature branch and read after that branch has merged and been deleted. Supplying the writing branch certifies a line that is true for one commit and false from the merge onward, which is how the first such file rotted; supply the branch the next session will actually be on, normally the repo's default. A second such file, or one that fails validation, is a violation. Plans in `docs/designs/` still follow §6.2; the ROADMAP is state, not planning.
+
+Repos with a product surface also declare a **charter** (target user, the wedge, the promise, non-goals) — in the ROADMAP's own `## Charter` section, which the template ships, or in an ADR — and `writing-plans` must cite the charter line a plan serves. A plan serving no line is rejected at review, which is the moment scope creep becomes visible instead of retrospective.
+
+### 6.6.1 What is not checked
+
+A rule nobody reads as partial becomes evidence that it holds everywhere, which is worse than an admitted convention because it stops anyone looking for the gap. §6.5.1 carries five such clauses for that reason, and a sixth — the closing-keyword clause — that is checked on one surface of the seven it reaches, which is the same failure wearing a green tick unless the gap is stated; the list below carries seven.
+
+A ROADMAP check establishes, each over a complete surface: that the file exists wherever the manifest's profile declares `roadmap: required`; that `## Now` and `## Next` are both present; that each is followed by a table headed `Item | Closes when | Rung`; that every body row's third cell is exactly one backticked rung from the seven-item ladder; that no body row's "Closes when" cell is empty; that exactly one `Board:` line survives; and, under `required`, that no `<placeholder>` and no shipped example row remain.
+
+It establishes none of the following, which are carried by convention:
+
+- **The five-row cap on `## Now`.** The number is a per-repo judgement, and a check would harden a default nobody chose.
+- **`Last verified` freshness in `## Standing gates`.** Checkable in principle, but the cadences are per-row prose; a check that parsed some of them and not others is the partial kind this section forbids.
+- **The presence of `## Charter`.** It is scoped above to repos with a product surface, and nothing in a repo states whether it has one.
+- **Whether a rung is honest.** A check proves a rung was named. It cannot prove it was earned, and this is the most important of the five: a green check here is evidence of a well-formed roadmap, never of a true one.
+- **Deletion of the launch-pad file on pickup.** §6.6 requires it and nothing checks it; the file's validity is checked, its removal is not.
+- **Whether a closing keyword sits beside an issue number anywhere but the launch pad.** §6.5.1's clause reaches PR bodies, commit messages, review comments, issue bodies and status reports; `validate-prompt.mjs` reaches `docs/designs/next-session-prompt.md` and nothing else, because that is the only one of those surfaces that is a file in a repository. It is named here rather than counted as coverage: this is precisely the partial check this section exists to declare, and it earns its place because **both recorded occurrences entered through the launch pad** — prose written there and copied into a PR body. A repo-side guard over all of `docs/` was weighed and rejected: keyword-adjacent numbers are legitimate in frozen design docs and in the daftplate-managed `docs/quick-ref-workflow.md`, so such a guard is vacuous or a carve-out for the single file that already has one. The check is also **one-sided by construction** — it refuses the dangerous form and cannot certify that a sanctioned `+`-joined form means what its author intended.
+- **Whether a *qualified* `owner/repo#N` in the launch pad is this repo's own issue.** The validator refuses the unslashed third spelling — `daftplate#152`, `post-#123` — because §6.5.1 permits `#N` and `owner/repo#N` and no other form, and the third one silently emptied the staleness check. It does not refuse the qualified form and cannot: told nothing about which repository it is validating for, `DaftVino/daftkit#3` and the working repo's own qualified spelling are the same shape to it, so a prompt naming its own issues fully qualified still passes `issue-closed` unread. Supplying that identity was weighed and rejected rather than deferred — the working repo's name differs from `DaftVino/daftplate`, which is a real, separate public export, so name-matching would exempt the spelling a person would plausibly mistype and catch only one nobody writes.
 
 ## 7. AI agent integration
 
@@ -336,3 +400,70 @@ Migration checklist per file: (1) create the issue, (2) move investigation to co
 **Model routing.** Mechanical, high-volume work goes to the cheap tier; judgment, review, and security-sensitive work to the strong tier; the default shape is one strong reviewer over N cheap generators. Per-machine capabilities and limits (sandbox constraints, argv/timeout ceilings, account usage caps) are recorded in a durable environment-notes doc in the repo that discovered them and mirrored to `hard-won-constraints.md` — never only in a session prompt.
 
 **Session brief contract.** Every agent brief states: outcome, the user journey it serves, allowed files, forbidden files/domains, existing interfaces, non-goals, database/rollback requirements, required tests (unit / integration / live / cross-tenant as applicable), and the evidence to return. No deploy or push unless explicitly authorized.
+
+## 11. HTML conformance
+
+**The target is the WHATWG HTML Living Standard**, measured with the [W3C Nu Html Checker](https://validator.w3.org/nu/). It is deliberately not "HTML5": W3C and WHATWG signed a memorandum of understanding in May 2019 under which the WHATWG Living Standard became the single version of HTML, and the W3C HTML5 Recommendation was retired and is no longer maintained. A standard that named the retired Recommendation would be pointing at a frozen document. Naming the checker separately is the point — WHATWG owns the specification, and W3C still ships the instrument.
+
+**What is measured is served output, never source.** In every profile that emits HTML, the source is not HTML: `gas-webapp` templates carry Apps Script `<?= ?>` scriptlets, and `web-app` and `app-monolith` hold framework components. A validator pointed at source files therefore reports success over files it never parsed, which is worse than no check at all.
+
+| Profile | Can a gate exist? | Why |
+|---|---|---|
+| `gas-webapp` | No | Templates are not HTML, and there is no build step — the output exists only once Apps Script renders it |
+| `web-app` | In principle | Its `verify` metadata runs a build, so the built output is validatable; routes needing a server are not |
+| `app-monolith` | In principle | Same — a build exists, and server-rendered routes are out of reach of a static check |
+| `userscript` | No, by definition | It emits no HTML of its own. The host site's DOM belongs to a third party, and validating it reports their bugs as ours |
+
+Neither "in principle" row names a framework or an output directory, because neither profile fixes one: `web-app` names one static-first framework and then explicitly permits any equivalent, and `app-monolith` says only "a browser client in the same repo". The claim rests on their `verify` metadata, which is real, and on nothing else.
+
+**The baseline, wherever HTML exists at all.** Cheap, profile-independent, and checkable by reading:
+
+- `<!DOCTYPE html>` first, before anything else
+- `<meta charset="utf-8">` inside the first 1024 bytes
+- a `lang` attribute on `<html>`
+- unique `id` values within a document
+- escaped `&` and `<` in text and attribute values
+
+**Stating the rule is not enforcing it.** This section is prose. Only the two build-carrying profiles could hold a real gate, and even there it would cover built pages and not server-rendered routes. The cost of building one is concrete rather than vague: §2.2 requires any binary a workflow downloads to be pinned to a digest committed in the workflow, which is a permanent maintenance obligation; calling the hosted `validator.w3.org/nu` API from CI sends built pages to a third party on every push and makes CI depend on someone else's uptime; and a Node validator package is unavailable, since daftplate's scripts carry no dependencies. Enforcement is a separate decision with a separate cost, and this paragraph is the handoff to it, not a promise made here.
+
+### 11.1 Accessibility
+
+Markup validity and accessibility are different claims: a page can validate perfectly against the Living Standard and still be unusable with a screen reader. §11 covers validity; this covers use.
+
+**The target is WCAG 2.2 Level AA**, named with the version, because "WCAG AA" unqualified has meant three different criteria sets since 2008. WCAG 2.2 has **86 success criteria** — 61 in 2.0, plus 17 in 2.1, plus 9 in 2.2, minus the removed 4.1.1 Parsing. Of the nine added in 2.2, **six are Level A or AA**: 2.4.11 Focus Not Obscured (Minimum) AA, 2.5.7 Dragging Movements AA, 2.5.8 Target Size (Minimum) AA, 3.2.6 Consistent Help A, 3.3.7 Redundant Entry A, and 3.3.8 Accessible Authentication (Minimum) AA. The other three are AAA, so for an AA target the delta from 2.1 is six, not nine.
+
+**Four profiles serve a UI and all four are in scope**: `web-app`, `app-monolith`, `gas-webapp`, and `userscript` **with a narrowed obligation**. A userscript injects into a page it does not own, so it is accountable for the accessibility of *what it adds* — its own controls, its focus handling, its announcements — and not for the host page. Narrowed, never excluded.
+
+**The baseline.** Four of these six map to Level A or AA criteria; two are house practice AA does not require, and the difference is marked rather than blurred:
+
+| Item | Status |
+|---|---|
+| Text contrast at least `4.5:1`, or 3:1 for large text and UI components | AA — 1.4.3, 1.4.11 |
+| Every interactive element keyboard-operable with a `visible focus indicator` | A/AA — 2.1.1, 2.4.7 |
+| Alt text on meaningful images, `empty alt` on decorative ones | A — 1.1.1 |
+| Form controls with `programmatic labels` | A — 1.3.1, 3.3.2, and 4.1.2 Name, Role, Value |
+| Exactly `one h1`, no skipped heading levels | **House practice** — no A/AA criterion requires it |
+| `landmark elements` over `<div>` soup | **House practice** — 1.3.1 concerns programmatic structure, not landmarks specifically |
+
+**AA is the conformance target.** The two house-practice items are additional and never override a success criterion; where they appear to conflict, the criterion is what a reviewer cites.
+
+**Stating the rule is not enforcing it.** This section is prose, and no automated run establishes conformance: a checker cannot evaluate whether alt text is *accurate*, whether focus order is *sensible*, or whether a control's accessible name matches its visible label in *meaning*. A green automated run is not conformance. **daftplate's scaffolding ships no accessibility checker** — its own scripts carry no dependencies — which is a fact about this repository and not advice to scaffolded repos, which have builds and are free to install one.
+
+**Two of the four fragments carry a pointer to this section and two do not**, and the reason is mechanical rather than an oversight: `verify-repo.mjs` caps a composed `CLAUDE.md` at 60 lines, and measured before this edit, `app-monolith` and `userscript` already compose to 59. Adding a line would put them at exactly the cap, so any later fragment edit breaks scaffolding for two profiles. A fragment is a router hint; the rule lives here, and those two profiles take their obligation from this document alone.
+
+## 12. Regression test authenticity
+
+A test that executes the changed code has proved that it ran. It has not proved that it would have failed before the fix, and those are different claims. A regression test that cannot fail is coverage, not evidence.
+
+**Every regression test records four things**, in the plan or the PR that introduces it:
+
+1. **The claim** — the behaviour the test asserts, stated as a property rather than as "it works".
+2. **The mutation** — a concrete change to the production code, or a known-bad implementation, that reintroduces the bug. Named specifically enough that someone else could apply it.
+3. **The observable** — the exact difference the assertion must distinguish between the fixed code and the mutated code.
+4. **`Observed red:`** — evidence that the focused test was seen failing with that mutation applied, before the fix was accepted.
+
+**Weaker checks do not establish a stronger claim.** Coverage, "it executed", "it did not throw", "the result is not `undefined`", and type-only assertions each prove less than they appear to. The concrete case: if the mutation returns `null` and the assertion only rejects `undefined`, the assertion accepts the mutant and the test does not prove the claim. Compare exact values or exact bytes.
+
+**The cost is real and is the mechanism.** Every regression carries a small red-run burden, and a purely additive or documentation-only test needs an explicit note that it is *not* a regression test. That friction is what stops a passing test being accepted merely because it touched the changed lines.
+
+**What this does not claim.** Nothing here is sound static analysis, and a sufficiently subtle tautology survives it. The narrower promise is that a test body and a concrete counterfactual are no longer omitted by design.

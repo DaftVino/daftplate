@@ -11,6 +11,54 @@ repos that need them.
 
 ## User-level skills
 
+### agent-fixer
+
+**Purpose:** State what the delegated fixer *is* and what an unattended run is allowed to do — the publication split, the brief the run composes, and the prohibitions. Deliberately not a trigger: starting, stopping, scheduling and inspecting every agent live in `/daft-agent`, because triggering documented per agent is triggering documented twice and the second copy is the one that goes stale.
+
+**Invocation:** `/agent-fixer`, or a question about what the fixer does, what an unattended run may do on this machine, or why a run refused. Invoking it starts nothing — there is no path from this page to a running agent.
+
+**Inputs / outputs:** Doctrine, not tooling: it reads nothing and writes nothing. What it documents is a two-process split — the **run** in a git worktree of its own, always `acceptEdits`, with `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GH_CONFIG_DIR` all redirected so it may not push or open a pull request; and the **publisher**, in the runner process after the run has exited, holding the operator's own credential and permitted exactly one branch and one draft pull request. The trigger is a label applied to the issue on the board, and the six-step brief the run receives is sourced from a shared brief module rather than restated here, with a test pinning the two lists together.
+
+**Failure modes:** A run refuses by name — the enablement gate, an undeclared or ambiguous board, a missing delegation label (checked for existence, because a list filtered by a label that does not exist exits 0 and empty), an issue already claimed by another run, acceptance criteria that do not exist, three separate isolation outcomes, and no reproduction in the run's own commits. A run never merges, never closes an issue, never deletes what it did not create, never opens more than one draft pull request, and never writes an attribution footer. The page also records one gap rather than implying a gate: the workstation credential carries a scope that can publish file contents to the public internet in a single command without any push, and nothing in the loop refuses that gesture today — so the brief answers it with a reason as well as a rule.
+
+**daftkit disposition:** not portable — it drives a runner script plus five shared library modules that only a daftplate checkout has
+
+### agent-hunter
+
+**Purpose:** State what the five defect-hunting lenses are and what they may do — the finding shape, and why every lens is report-only. Like `/agent-fixer` it is doctrine: `/daft-agent` is the only place a hunt is started.
+
+**Invocation:** `/agent-hunter`, or a question about what the hunters look for, what a finding must contain, why nothing was filed, or what a lens is permitted to do. Triggers nothing.
+
+**Inputs / outputs:** Read-only prose. Each lens invokes a doctrine that already exists — `/investigate`, `/review`, `/audit`, `/cso`, and the export guards — rather than re-deriving one, so a lens's job is selection, scoping and structuring and never judgement about what counts as a defect; the doctrine that answered is validated against the lens that asked. A finding carries the lens, a repo-relative path, the nearest enclosing symbol, a defect class, a severity with its reasoning, and an `evidence` field that is exactly `reproduced` or `reasoned`.
+
+**Failure modes:** Report-only is structural rather than a flag: the permitted-operations list holds three entries and neither creating nor closing an issue is among them, closing is additionally named as never permitted, and neither the hunter script nor its lens module can start a process at all — without one there is no `gh` and so no filing, and a test reads both sources and asserts it. Filing arrives only with a measured precision figure, and no lens has one. A finding is rejected for omitting `evidence`, for claiming `reproduced` with no reproduction, for claiming `reasoned` while attaching evidence anyway, and for an absent `symbol` — `null` is an answer, absent is not. A lens that never ran and a lens that found nothing are reported as different results, and a malformed answer is reported rather than dropped, because precision is measured over exactly that difference. It re-files nothing it has already raised, and names the miss it knows about: a rename or a move defeats a path-and-symbol fingerprint, and the limit is reported rather than engineered around.
+
+**daftkit disposition:** not portable — doctrine for an agent that only the checkout-bound `/daft-agent` can start, so standalone it is a page pointing at a page that is not there; the agent trio travels together or not at all
+
+### anchor
+
+**Purpose:** Turn one specified subject into an evidence-grounded continuation brief and a ready-to-submit `/compact` command, so an unfocused compaction cannot discard the task state needed to continue. Continuation inside the same session — not an archive, and not a handoff to a new one.
+
+**Invocation:** `/anchor <subject, desired outcome, and next step>`, explicitly and only. `disable-model-invocation: true`, so it never fires on its own: compaction timing belongs to the user, and excluding it from discovery also keeps its description out of every session's context.
+
+**Inputs / outputs:** Read-only. Prefers facts already established in the conversation; inspects local state only when the named artifact's current state is uncertain *and* that uncertainty would change the brief — concise git state, or the named PR or issue, through bounded `Bash` grants. Writes no file. Produces one instruction plus one fenced block whose first token is `/compact`.
+
+**Failure modes:** Two by design. An argument missing any of subject, desired outcome or resume point gets one clarification question and nothing else — no repository inspection, no partial anchor, no command; defaulting an omitted scope to "the current task" would preserve the wrong subject. And it cannot execute `/compact` itself, because a skill cannot trigger a built-in command ([upstream request](https://github.com/anthropics/claude-code/issues/77266)); it prints the command and must never claim compaction occurred. Neither `git` nor `gh` is a hard dependency — an unavailable one means preserving the uncertainty, not failing. A genuinely unrelated next task gets `/clear` recommended instead.
+
+**daftkit disposition:** v1.0 portable
+
+### audit
+
+**Purpose:** Audit whether tests actually prove what they claim. Reads raw test bodies and the production code beside them, names a concrete mutant per assertion, and reports which assertions accept it. Supplements `/review` rather than replacing it.
+
+**Invocation:** `/audit <a diff, a branch, or a named test scope>`. Also "are these tests real", "would this test have caught it", "mutation check".
+
+**Inputs / outputs:** Read-only. Consumes a diff or a named scope; produces three sections — Blocking, Citation, and **What holds up**, the last naming the mutants the assertions *do* reject. An audit that reports only failures is indistinguishable from one that looked at nothing.
+
+**Failure modes:** It is model-assisted, not sound analysis, and a subtle tautology can survive it. It may recommend a focused command but may **not** write `Observed red:` unless the failing run happened in the session, and it reports absent historical evidence separately from a semantic tautology, because conflating them inflates the second. With an empty diff it says so and stops rather than auditing the whole suite.
+
+**daftkit disposition:** v1.0 portable
+
 ### brief
 
 **Purpose:** Toggle terse output mode for the session — lead with the result, cut anything that doesn't change what the user does next.
@@ -71,6 +119,30 @@ repos that need them.
 
 **daftkit disposition:** v1.0 portable
 
+### daft-agent
+
+**Purpose:** One screen for every agent in the repository — what each one is, whether it can fire, whether it is on, when it runs, and what is running now. It is the single trigger surface: `/agent-fixer` and `/agent-hunter` hold what each agent *is*, and neither holds a way to start, stop, schedule or inspect one.
+
+**Invocation:** `/daft-agent`, "show me the agents", "turn the hunter on", "schedule the fixer", "run the hunter now", "stop that run", or a question about whether an agent is enabled.
+
+**Inputs / outputs:** Renders the agent menu from a script in the daftplate checkout and prints it **verbatim** — the row numbers are the reply grammar, so a screen that summarised or reordered would make every later instruction address a row the user never saw. Edits accumulate in conversation, preview through a plan pass that writes nothing, and land only on the word `save`; the screen re-renders afterwards because indices move. Run counts and live runs come from the run records rather than from memory, so a run this session did not start still shows. A window is honoured by one Windows scheduled task waking every 15 minutes; the schedule does not encode the window, so one readable file holds the truth.
+
+**Failure modes:** Switching an agent on is the owner-held enablement act, so both plan and apply print every enablement condition and where it stands, verbatim, at the moment of the toggle — enabling over an open condition is permitted, enabling blind is the thing the decision record was written to prevent. `CANNOT FIRE` is not `off`: it means the thing the agent waits for does not exist on this board, and the screen prints the unmet precondition and the act that would close it rather than offering a toggle as the fix. Not every agent takes a window — the hunter declares that no timer can drive it, since it plans invocations for a session to perform, so a window on it is refused at the screen and a sweep that finds one starts nothing. It never edits the agent record files by hand, never deletes a scheduled task it has no record of creating, and never claims a run is stopped because a stop was requested — a stop is a request the run honours, never a delete. One limit is stated every time a task is registered: a task registered without an explicit run-as user runs while the user is logged on, and whether it fires while logged off was never measured and must not be implied.
+
+**daftkit disposition:** not portable — its whole operative body is a checkout script plus one installer call and five runner calls, and daftkit ships no scripts directory, so standalone it installed as a menu whose every row is a command that is not there
+
+### daftplate
+
+**Purpose:** Show every daftplate and daftkit setting on one screen — session toggles, hooks, installed skills, decision records, plugins — and save a batch of edits as one act.
+
+**Invocation:** `/daftplate`, "daftplate config", "show my settings", "what hooks are registered", "turn brief on", "remove a skill", "add an ADR".
+
+**Inputs / outputs:** Runs the config menu script from the daftplate checkout and prints its render verbatim, for the same reason `/daft-agent` does — the numbers are the reply grammar. The script is stateless and **the skill holds the staged edits**, in conversation context; nothing reaches disk until the user types `save`, and `exit` discards. The checkout path comes from the recorded location in the user's global instructions, and if it is not recorded the skill says so and stops rather than reading some other repository's skills and reporting them as the user's.
+
+**Failure modes:** Three refusals, and each is reported and left alone rather than achieved another way: removing a skill daftplate did not install (it names the owning pack and its uninstaller — deleting it by hand instead is exactly what the never-delete rule forbids, so the refusal is the rule working), promoting to global a hook whose command contains a project-directory variable that does not resolve there and would silently never fire, and an index that is not on the current screen. A refusal never stops the rest of a batch. It touches nothing outside its six surfaces — not Claude Code's own settings, not outbox notes, not the repo manifest, not toolchain installs, not any other repository. And it is honest about what a toggle is: the stored value is a default for new sessions, not a live channel into a running one, so writing a toggle here does not make the current session obey it.
+
+**daftkit disposition:** not portable — its menu script reads the checkout's own skills tree and decision records to derive ownership, so standalone it would render an empty screen and report it as the truth about the user's configuration
+
 ### deliberate
 
 **Purpose:** Convene three Codex reviewer archetypes (native, veteran, aesthete) with incompatible priorities to argue a contested plan, spec, or design; the calling agent chairs and resolves.
@@ -82,6 +154,30 @@ repos that need them.
 **Failure modes:** Codex cannot spawn its own file reader on this machine (`CreateProcessAsUserW failed: 5`) and rejects large prompts passed as arguments (`Argument list too long`) — everything must go in via stdin. `isLooping` compares stance labels with strict equality, so raw model answers never match and loop detection silently never fires unless the chair first canonicalizes each round to a short label (e.g. `'build-reduced'`). If the topic isn't actually contested, the skill says so and declines to convene rather than manufacture disagreement. Three failures are recorded from a measured 611k-token run: a re-filing round 2 costs more than round 1 and returns a fraction of the value; agreement in round 1 is corroboration, not convergence, and triggering resolution from it leaves completeness untested; and a panel judging a visual artifact from source code speculates — hence the mandatory rendered evidence before the final dispute.
 
 **daftkit disposition:** deferred to v1.1 (needs script vendoring)
+
+### diagram
+
+**Purpose:** Read a repo through a chosen lens and produce an editable point-in-time board — a `.excalidraw` file plus a Mermaid source. The structure lens is the distinction: it renders folders as nested frames and *units* as semantic cards, so the deliverable is something the user arranges and keeps rather than a picture regenerated from scratch each time. A raw file listing is never the deliverable — a board where every card says `SKILL.md` is a failed board.
+
+**Invocation:** "diagram", "map this repo", "structure board", "update the board", "refresh the diagram", "show what relies on what", "sequence for X", "visualize the structure".
+
+**Inputs / outputs:** Self-contained — it bundles its own scanner and its own converter beside the skill and calls out to no diagram tooling. The scanner lists files through git (tracked plus untracked, ignore rules respected) and applies depth and per-folder caps; the agent then identifies the card unit, confirms one organization choice with the user, enriches the model, and the converter validates it against the schema for the chosen type before writing the board and its Mermaid companion into the target repo. Four lenses (`structure`, `domain-data`, `process-flow`, `described`) and four output types, chosen independently.
+
+**Failure modes:** It refuses to overwrite an existing board, because the user's layout is the work — an update **merges** instead, matching on a marker every generated element carries rather than on label text, so a renamed card is still the same card. Position, size, frame membership, user recolouring, user-edited labels and anything hand-drawn survive; a unit new in the model lands in an inbox frame rather than being dropped into place, and a unit gone from the model is tinted stale rather than deleted. Element ids are preserved so a hand-drawn arrow still points at the card it was aimed at. Where the merge cannot guarantee that — a board carrying no markers, two elements claiming one marker, a hand-drawn element referencing something the update cannot preserve — it leaves the board untouched, writes the fresh render beside it under a different name, and says why. Diagrams are capped at roughly 40 nodes and it narrows the subsystem rather than emitting a wall. Boards are declared non-authoritative scratch snapshots, and two verified Excalidraw quirks are passed on rather than worked around: dragging a frame moves only its direct members, and the legend swatches have no identity of their own so an arrow bound to one cannot be preserved.
+
+**daftkit disposition:** v1.1 portable
+
+### enroll
+
+**Purpose:** Bring a repository daftplate never scaffolded under management, by composing what the templates would produce today, comparing that against the bytes already in the repo, and recording the result as a new `.daftplate.json`. It creates the manifest `/sync-standards` needs; it is the *start* of management, not the whole of it.
+
+**Invocation:** "enroll this repo", "adopt this repo", "bring this under daftplate", or when `/sync-standards` refuses a repo because it has no manifest.
+
+**Inputs / outputs:** Runs from a daftplate checkout, because it has to compose the real scaffold output, and installs nothing in the target. **It writes exactly one file — the manifest — and no other file in the target is created, modified or deleted.** Every composition input is declared on the command line and never inferred: the profile and the three token values come from the operator, while the verify, test and deploy commands are read from the profile's own description. A dry run is the complete measurement and the same one the write records; the report classifies each candidate path as matched (recorded as managed), diverged (recorded with both digests — measured, not owned), or absent (a report line and no manifest entry), then summarises every other Git-visible path as unmanaged, counted and untouched.
+
+**Failure modes:** It refuses a target that vendors the standards, because the canonical tree is never copied out and a manifest would certify a repo whose pointer is contradicted by a stale snapshot beside it. It also refuses a target that is not the exact root of a Git work tree, one that already has a manifest, one whose manifest exists but cannot be parsed, an unsafe link on a managed path, a target that changed mid-measurement, and a manifest that appeared during the run. It never guesses the profile or the tokens, never writes a repository file, never re-baselines, and does not keep the repo current afterwards. Enrollment is **one-shot**: a second run refuses whether the daftplate version is the same or newer, so a wrong summary value — which makes every token-bearing file read as divergent — is cheap to fix only before the manifest is committed. After that, a separate reconciliation command restates the manifest, naming each ownership change explicitly and refusing any entry that is not reproducible from its own recorded inputs, because restating one that is not would erase whatever else put those bytes there.
+
+**daftkit disposition:** not portable — it runs an enrollment script out of a daftplate checkout to compose the real scaffold output, so it cannot stand alone in a skills-only repo
 
 ### gas-deploy
 
@@ -142,6 +238,42 @@ repos that need them.
 **Failure modes:** No-ops (skips the brief entirely) when the session opens with a concrete, self-contained task, since running it there is pure overhead. Skips `gh issue list` without comment if `gh` is unavailable or there's no remote. If `docs/code-map.md`'s commit stamp doesn't match the latest commit touching indexed source, reports the drift count instead of trusting the map, and never regenerates it unasked. If the map is absent and a source file exceeds 100KB, says so and offers `/code-map` rather than generating it.
 
 **daftkit disposition:** v1.0 portable
+
+### publish
+
+**Purpose:** Regenerate the public daftplate and daftkit repositories from the private working repo. The exports are **one-directional and curated**: every change is made in the working repo and the public ones are regenerated, never edited directly.
+
+**Invocation:** "publish", "publish the update", "sync the public repos", "update the public export". Run from the working repo's root.
+
+**Inputs / outputs:** Drives the export engine, which selects an allowlist, applies a denylist *after* it, refuses to publish if any exported file names a private repo, and copies into a destination over the top — **never deleting**. Four gates before anything public moves: a clean tree on the default branch with a green suite; a dry run whose file list a human reads, which deliberately makes its network call so a real run's refusal is never a surprise; an independent secret scan over a real temp export; and a build of the export into a temp directory where its own suite is run. Updating an existing public repo goes through a pull request, since their default branches are protected. The report states which repo was updated, the file count, the pull request URL, and confirms each gate.
+
+**Failure modes:** The private-name scan is case-insensitive over both paths and content, and a hit stops the publish — the fix is to genericize the reference in the source and improve the public artifact, never to weaken or skip the scan, which is the one guard between the private repo and the public internet. A released version that is tagged but has no published GitHub Release refuses a real run; a failure to *query* releases is reported and allowed through, because failing closed applies to a known violation and not to absent evidence, so a clean run there is not proof. The exported suite is the only check that sees what a stranger sees: a static sweep catches a shipped file naming a withheld path, but not a withheld path read inside a function the file merely hands the repo root to. And because the export never deletes, a file removed in the source must be removed by hand in the clone.
+
+**daftkit disposition:** not portable — it is the tool that maintains these exports, so shipping it would make the export re-export, and it holds the private-name list
+
+### standards-change
+
+**Purpose:** The deviation outbox. When a repo **deliberately** breaks a daftplate standard, the reason belongs somewhere a future reader will find it — not in a commit message nobody greps and not in a comment that ages out. It queues a note locally; a later flush turns one note into a daftplate ADR or an issue.
+
+**Invocation:** "standards change", "record a deviation", "we're breaking the standard here", "flush the outbox", or a repo that needs to differ from the standards on purpose. Two halves usually run weeks apart and from different repos: queueing runs from the deviating repo and is cheap, local and offline; flushing runs from the daftplate checkout, once someone is ready to decide.
+
+**Inputs / outputs:** Its bundled script imports Node builtins only, which is a correctness requirement rather than a preference — it runs from repos that have no daftplate checkout, so a shared-module import would throw the first time anyone used it. A note carries a required rule and a required reason, optionally a local decision record in the deviating repo, and reads the profile and daftplate version from the repo manifest when there is one (recorded as null when there is not, so a repo daftplate never scaffolded can still report a deviation). Notes queue under the user's own daftplate directory rather than straight to GitHub, because a note names a private repo and the standard it broke — nothing leaves the machine until a human flushes it. A bare flush lists and moves nothing.
+
+**Failure modes:** **It never deletes a note** — a flush *moves* it to a flushed subdirectory, byte-identical, and only after the ADR file exists on disk or GitHub has returned an issue URL, so a failed flush leaves the note pending, which is the recoverable direction. It never flushes an issue to a public repo; the target is checked for privacy first. It never creates a duplicate: every body carries an outbox ID and creation searches for it first, so a retry after a partial failure files once. It never overwrites an existing ADR, and never flushes the whole queue at once — one note, one decision. Two note formats are counted separately in the listing, because "11 pending" and "11 pending, none of which this tool can flush" are different situations and the first hides the second; a hand-written note flushes only as an issue, never straight to an ADR, since it carries no structured decision inputs and routing it through the ADR path would publish a decision nobody supplied. Any other file extension is named on stderr, left where it is, and fails the listing — a queue the tool cannot fully see is the queue failing at its one job.
+
+**daftkit disposition:** v1.3 portable
+
+### sync-standards
+
+**Purpose:** Push daftplate template changes into a repo it already produced, without ever overwriting work the repo did. It uses the committed manifest to tell *"the repo changed this file"* from *"the template changed this file"* — the first is reported and never touched, the second is the only thing it writes.
+
+**Invocation:** "sync standards", "update from the template", "pull the latest scaffolding", or after a base-layer file changes and existing repos should pick it up.
+
+**Inputs / outputs:** Runs from a daftplate checkout, because it has to compose what the template would produce today, and is never installed in the target. Preconditions are a committed manifest, a clean working tree in the target, and a branch that is not its default. A dry run comes first and is the only place refusals are explained; each report line is one path and one decision, across a fixed vocabulary — current, updated, refused (modified, overridden, collision, vanished, unsafe link), missing, new, declined, diverged, retained, and the rebaseline states. Adds, restores and declines each require the path to be named. Machine-readable output and per-path diffs are both opt-in, the diff deliberately per path rather than a whole-run switch, so asking for one comparison does not put every managed file's contents into a log that retains it.
+
+**Failure modes:** **It never deletes**, and it never touches a file whose digest does not match the manifest even when that file happens to equal what the template would produce today — matching bytes are not evidence of where they came from. There is no bulk add, restore, decline or rebaseline, on purpose: each expands what the manifest claims daftplate owns or asserts about operator intent, and a bulk flag would make that not-a-decision. A selector matching nothing refuses the whole run and names the status the path actually got, because it used to be a silent no-op that read exactly like naming five paths correctly. A separate command records what is already measurably true for the one state an ordinary run can never leave — a path whose bytes already equal the template's while the manifest records a different digest, which is where restoring from Git leaves you — and it writes no repository bytes at all, refusing every row where the two still differ. A part-way failure **rolls back** newest first, re-proving containment and that the digest is still the one this run wrote; a path something else changed is left as found, never overwritten, and the run fails naming the original failure, each refusal, and a retained staging directory holding the only copies of what it could not restore. That is rollback-safe, not atomic: it does not survive the process being killed between two writes and cannot win a race against another writer. One historical corruption is documented with its repair — a repo scaffolded before the manifest carried a token map had nothing to compose from, so the literal word `undefined` was written into every token-bearing file and then recorded as the new digest, making the next run report the repo current. Sync now refuses before it composes.
+
+**daftkit disposition:** not portable — the propagation half of the scaffolding engine rather than a portable skill; it runs a script from a daftplate checkout and has to compose the current template tree to work at all, so a standalone install would arrive pointing at a checkout that is not there
 
 ## Repo-scoped skills (app-monolith)
 
@@ -211,18 +343,28 @@ These five ship inside the `app-monolith` profile's files and land in a scaffold
 
 | Skill | Kind | One-line purpose | daftkit disposition |
 |---|---|---|---|
+| agent-fixer | user-level | Doctrine for the delegated fixer — the publication split and what an unattended run may not do | not portable (drives a runner and library modules only a checkout has) |
+| agent-hunter | user-level | Doctrine for the five defect lenses — the finding shape, and why every lens is report-only | not portable (doctrine for an agent only the checkout-bound `/daft-agent` starts) |
+| anchor | user-level | Prepare a continuation brief and the `/compact` command that preserves it | v1.0 portable |
+| audit | user-level | Check whether tests reject a named mutant, or merely execute | v1.0 portable |
 | brief | user-level | Toggle terse, result-first output for the session | v1.0 portable |
 | code-map | user-level | Generate a line-anchored symbol index so large files are read in slices | deferred to v1.1 (needs script vendoring) |
 | continuum | user-level | Hand the chat off and write the validated prompt the next one starts from | v1.2 portable |
 | crit | user-level | Design critique that refuses any appearance finding nobody rendered | held (needs a dependency manifest, startup validation, tested degraded mode) |
 | curious | user-level | Dial clarifying-question frequency moderately above default | v1.0 portable |
+| daft-agent | user-level | One screen that starts, stops, schedules and inspects every agent in the repo | not portable (a checkout script plus runner calls daftkit has no scripts for) |
+| daftplate | user-level | Show every daftplate/daftkit setting on one screen and save a batch of edits | not portable (its menu derives ownership from the checkout's own tree) |
 | deliberate | user-level | Argue a contested plan/design through three Codex archetypes, chaired by the agent | deferred to v1.1 (needs script vendoring) |
+| diagram | user-level | Analyze a repo through a lens and render an editable `.excalidraw` (structure working board / flowchart / ER / sequence) | v1.1 portable |
+| enroll | user-level | Measure an existing repo against the real scaffold output and record it as a manifest | not portable (composes scaffold output from a daftplate checkout) |
 | gas-deploy | user-level | Deploy a Google Apps Script web app via clasp, avoiding ID and `/exec`-vs-`/dev` traps | v1.0 portable |
 | handoff | user-level | Write a durable session handoff note at phase end | v1.0 portable |
 | insist | user-level | Hard-gate every user question so it's answered by the user, never auto-decided | v1.0 portable |
 | new-project | user-level | Scaffold a standards-compliant repo from base + one profile overlay | daftplate-only (the scaffolding engine) |
 | orient | user-level | Emit a short session-start brief on repo state | v1.0 portable |
-| diagram | user-level | Analyze a repo through a lens and render an editable `.excalidraw` (structure working board / flowchart / ER / sequence) | v1.1 portable |
+| publish | user-level | Regenerate the public curated exports from the private working repo | not portable (shipping the publisher would make the export re-export) |
+| standards-change | user-level | Queue a deliberate standards deviation, and later flush it into an ADR or an issue | v1.3 portable |
+| sync-standards | user-level | Push template changes into a repo daftplate produced, never over the repo's own work | not portable (composes the current template tree from a checkout) |
 | architecture-audit | repo-scoped (app-monolith) | Read-only drift audit of docs against the code | repo-scoped (app-monolith only) |
 | architecture-docs | repo-scoped (app-monolith) | Maintain small, linked C4-style Mermaid architecture views | repo-scoped (app-monolith only) |
 | database-schema | repo-scoped (app-monolith) | Migrate the schema additively and keep the DBML/ERDs current | repo-scoped (app-monolith only) |

@@ -11,6 +11,7 @@ export const REQUIRED_BASE_FILES = [
   'files/README.md',
   'files/LICENSE',
   'files/CHANGELOG.md',
+  'files/ROADMAP.md',
   'files/CLAUDE.md',
   'files/dot-gitignore',
   'files/dot-gitattributes',
@@ -19,6 +20,7 @@ export const REQUIRED_BASE_FILES = [
   'files/dot-claude/settings.json',
   'files/dot-claude/orient-hook.mjs',
   'files/dot-claude/question-gate.mjs',
+  'files/scripts/resolve-node-version.mjs',
   'files/dot-github/ISSUE_TEMPLATE/bug-report.yml',
   'files/dot-github/ISSUE_TEMPLATE/feature-request.yml',
   'files/dot-github/PULL_REQUEST_TEMPLATE.md',
@@ -37,7 +39,13 @@ export const REQUIRED_HEADINGS = {
   'context-rules.md': ['## Context budget', '## Subagent defaults'],
 };
 
-export const REQUIRED_META_KEYS = ['verify', 'test', 'deploy', 'docs-subdirs'];
+export const REQUIRED_META_KEYS = ['verify', 'test', 'deploy', 'docs-subdirs', 'roadmap'];
+
+// `roadmap:` classifies the profile, so the value is a closed set of two. A third
+// value is a violation and never a default: silently reading an unknown value as
+// `optional` would let a typo turn off the ROADMAP requirement in the repos that
+// most need it, and reading it as `required` would fail repos that never opted in.
+export const ROADMAP_VALUES = ['required', 'optional'];
 
 export const CLAUDE_MD_MARKERS = [
   '<!-- profile:constraints -->', '<!-- profile:routing -->', '<!-- profile:context -->',
@@ -65,6 +73,7 @@ export function parseProfileMeta(text) {
     test: entries.test,
     deploy: entries.deploy,
     docsSubdirs: entries['docs-subdirs'].split(',').map((s) => s.trim()).filter(Boolean),
+    roadmap: entries.roadmap,
   };
 }
 
@@ -103,6 +112,13 @@ export function metaValueIssues(meta, rel, profileDir) {
       'profile-metadata-test-form',
       rel,
       `test: "${meta.test}" runs nothing — the positional arg is a glob on Node 22+. Use "npm test" with package.json running bare "node --test".`,
+    ));
+  }
+  if (!ROADMAP_VALUES.includes(meta.roadmap)) {
+    issues.push(violation(
+      'profile-metadata-roadmap-value',
+      rel,
+      `roadmap: "${meta.roadmap}" is not a classification — use one of ${ROADMAP_VALUES.join(', ')} (repo-standards §6.6)`,
     ));
   }
   if (profileDir) {
@@ -337,8 +353,69 @@ export function checkWorkflows(root) {
       ));
     }
 
+    violations.push(...nodeVersionViolations(rel, text));
+
     return violations;
   });
+}
+
+const SETUP_NODE = /- +uses: +actions\/setup-node@/;
+const STATIC_NODE_VERSION = /^\s*node-version:\s*(['"]?)(?!\$\{\{)[^\s'"]+\1\s*$/;
+const RESOLVER_STEP_ID = /^\s*id:\s*node-version\s*$/m;
+const RESOLVER_COMMAND = /node scripts\/resolve-node-version\.mjs\s*>>\s*"\$GITHUB_OUTPUT"/;
+const RESOLVER_OUTPUT = /node-version:\s*\$\{\{\s*steps\.node-version\.outputs\.node-version\s*\}\}/;
+
+/**
+ * Every setup-node in a shipped workflow resolves the runtime instead of pinning it.
+ *
+ * All four workflows hardcoded `node-version: '20'`, four months past that line's
+ * end of life, and blind to a scaffolded repo's own `engines`. A literal in four
+ * files re-rots at the next LTS boundary, which is why this is a check and not
+ * just four edits — and why it enforces the mechanism rather than a version
+ * number, since a check that pinned "24" would need editing for the same reason
+ * the workflows did.
+ *
+ * Line-based, reusing this file's existing parsing style. No YAML library
+ * (CLAUDE.md #4) and no second filesystem walker — `workflowFiles()` already
+ * found this file.
+ */
+function nodeVersionViolations(rel, text) {
+  const lines = text.split(/\r?\n/);
+  const found = [];
+
+  for (const [index, line] of lines.entries()) {
+    if (STATIC_NODE_VERSION.test(line)) {
+      found.push(violation(
+        'workflow-static-node-version',
+        rel,
+        `line ${index + 1}: node-version is a literal — resolve it from the repository's engines via scripts/resolve-node-version.mjs, or it goes stale at the next LTS boundary the way '20' did`,
+      ));
+    }
+    if (!SETUP_NODE.test(line)) continue;
+
+    // The resolver has to come BEFORE, or its output does not exist yet.
+    const preceding = lines.slice(0, index).join('\n');
+    if (!RESOLVER_STEP_ID.test(preceding) || !RESOLVER_COMMAND.test(preceding)) {
+      found.push(violation(
+        'workflow-missing-node-resolver',
+        rel,
+        `line ${index + 1}: setup-node has no preceding step with id: node-version running scripts/resolve-node-version.mjs`,
+      ));
+      continue;
+    }
+    // …and the `with:` block has to actually consume it. A resolver whose output
+    // nothing reads is a step that runs and changes nothing.
+    const withinStep = lines.slice(index, index + 6).join('\n');
+    if (!RESOLVER_OUTPUT.test(withinStep)) {
+      found.push(violation(
+        'workflow-unused-node-resolver',
+        rel,
+        `line ${index + 1}: setup-node does not consume \${{ steps.node-version.outputs.node-version }}`,
+      ));
+    }
+  }
+
+  return found;
 }
 
 export function verifyTemplates(root) {

@@ -52,6 +52,12 @@ Phases with no edge between them may be worked in parallel worktrees.
 - Consumes: <exact signatures from earlier tasks>
 - Produces: <exact names and types later tasks rely on>
 
+**Regression evidence** (§12 — omit only with a note saying this is not a regression test):
+- **Claim:** <the behaviour asserted, as a property>
+- **Mutation killed:** <a concrete change that reintroduces the bug, specific enough to apply>
+- **Observable:** <the exact difference the assertion distinguishes>
+- **Observed red:** <the focused command, and the failure seen with the mutation applied>
+
 - [ ] **Step 1: Write the failing test** — actual test code, not a description
 - [ ] **Step 2: Run it and watch it fail** — exact command, expected failure text
 - [ ] **Step 3: Write the minimal implementation** — actual code

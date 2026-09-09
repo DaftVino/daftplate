@@ -17,6 +17,7 @@ verify: npm run build
 test: npm test
 deploy: /land-and-deploy
 docs-subdirs: designs, adr, architecture, database
+roadmap: required
 ```
 
 ## Extra directories

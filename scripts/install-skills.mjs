@@ -183,6 +183,13 @@ export const GATE_INSTALLED_NAME = 'crit-report-gate.mjs';
 export const ATTRIBUTION_GATE_SOURCE_REL = join('scripts', 'attribution-gate.mjs');
 export const ATTRIBUTION_GATE_INSTALLED_NAME = 'attribution-gate.mjs';
 
+export const DRESS_REMINDER_SOURCE_REL = join('scripts', 'dress-reminder.mjs');
+export const DRESS_REMINDER_INSTALLED_NAME = 'dress-reminder.mjs';
+export const DRESS_SKILL_REL = join('skills', 'dress', 'SKILL.md');
+/** Claude Code's per-hook filter, in permission-rule syntax: the process starts
+ *  only for a command beginning `gh issue create`. */
+export const DRESS_REMINDER_IF = 'Bash(gh issue create*)';
+
 /**
  * Copy one gate script user-level and register it on one hook event.
  *
@@ -197,7 +204,7 @@ export const ATTRIBUTION_GATE_INSTALLED_NAME = 'attribution-gate.mjs';
  * A settings.json that will not parse is left exactly as it is, and nothing is
  * copied in that case either — a gate on disk that no event references is debris.
  */
-function registerGate({ sourceRoot, claudeDir, sourceRel, installedName, event, matcher }, opts = {}) {
+function registerGate({ sourceRoot, claudeDir, sourceRel, installedName, event, matcher, condition }, opts = {}) {
   const source = join(sourceRoot, sourceRel);
   if (!existsSync(source)) return { skipped: `${sourceRel} is not in this checkout`, registered: false };
 
@@ -225,8 +232,8 @@ function registerGate({ sourceRoot, claudeDir, sourceRel, installedName, event, 
     // someone's edit.
     cpSync(source, dest, { force: true });
     if (!already) {
-      const group = matcher ? { matcher, hooks: [{ type: 'command', command }] }
-        : { hooks: [{ type: 'command', command }] };
+      const hook = condition ? { type: 'command', if: condition, command } : { type: 'command', command };
+      const group = matcher ? { matcher, hooks: [hook] } : { hooks: [hook] };
       const next = {
         ...settings,
         hooks: { ...settings.hooks, [event]: [...groups, group] },
@@ -272,6 +279,27 @@ export function registerAttributionGate(sourceRoot, claudeDir, opts = {}) {
     installedName: ATTRIBUTION_GATE_INSTALLED_NAME,
     event: 'PreToolUse',
     matcher: 'Bash',
+  }, opts);
+}
+
+/** The /dress reminder, on PostToolUse, matched to Bash and filtered by `if`.
+ *
+ *  Registered only when /dress itself is in the checkout (owner ruling D9). The
+ *  public daftplate export ships scripts/ but withholds skills/, and this installer
+ *  keeps registering hooks there, so without the check a stranger would get a
+ *  reminder naming a skill they do not have. */
+export function registerDressReminder(sourceRoot, claudeDir, opts = {}) {
+  if (!existsSync(join(sourceRoot, DRESS_SKILL_REL))) {
+    return { skipped: `${DRESS_SKILL_REL} is not in this checkout, so the reminder would name a skill that is not installed`, registered: false };
+  }
+  return registerGate({
+    sourceRoot,
+    claudeDir,
+    sourceRel: DRESS_REMINDER_SOURCE_REL,
+    installedName: DRESS_REMINDER_INSTALLED_NAME,
+    event: 'PostToolUse',
+    matcher: 'Bash',
+    condition: DRESS_REMINDER_IF,
   }, opts);
 }
 
@@ -473,6 +501,13 @@ function main(argv, opts = {}) {
   if (attribution.skipped) logError(`attribution gate not registered: ${attribution.skipped}`);
   else if (attribution.registered) log(`${dryRun ? 'would register' : 'registered'} the attribution gate on PreToolUse(Bash): ${attribution.path}`);
   else log(`attribution gate already registered: ${attribution.path}`);
+
+  // The same independence again: the reminder neither depends on nor rolls back
+  // either gate. Its absence from an export with no skills/ is reported, not hidden.
+  const reminder = registerDressReminder(sourceRoot, dirname(target), { dryRun });
+  if (reminder.skipped) log(`/dress reminder not registered: ${reminder.skipped}`);
+  else if (reminder.registered) log(`${dryRun ? 'would register' : 'registered'} the /dress reminder on PostToolUse(Bash, if ${DRESS_REMINDER_IF}): ${reminder.path}`);
+  else log(`/dress reminder already registered: ${reminder.path}`);
 
   const checkout = recordCheckout(sourceRoot, claudeDir, { dryRun });
   if (checkout.action === 'refused') {

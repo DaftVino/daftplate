@@ -186,6 +186,40 @@ test('rule 7 — the same skeleton under optional is clean', () => {
   assert.deepEqual(rules(repo(text, 'design-vault')), []);
 });
 
+// --- rule 8: a Linear board's short name (§6.5.1, ADR 0014) -----------------
+
+/** `filled()` with the §6.5 board swapped for a Linear one carrying `link`. */
+function linear(link, team = 'team `FORGE`') {
+  return filled().replace(/^Board:.*$/m,
+    `Board: issues are created in GitHub and managed in Linear (ADR 0006) — the ${link} project, ${team}.`);
+}
+
+test('rule 8 — a Linear board with a slug short name and a team key passes', () => {
+  assert.deepEqual(rules(repo(linear('[daftplate](https://linear.app/x/project/daftplate-1)'))), []);
+});
+
+test('rule 8 — a display name is refused, because every <short>-<N> is written with it', () => {
+  const violations = checkRoadmap(repo(linear('[Daft Plate](https://linear.app/x/project/daft-plate-1)'))).violations;
+  assert.deepEqual(violations.map((v) => v.rule), ['roadmap-short-name']);
+  assert.match(violations[0].message, /`Daft Plate` is not a lowercase slug/);
+});
+
+test('rule 8 — a Linear board with no project link, or no team key, is refused', () => {
+  assert.deepEqual(rules(repo(linear('daftplate'))), ['roadmap-short-name']);
+  assert.deepEqual(rules(repo(linear('[daftplate](https://linear.app/x/p)', 'no team named'))), ['roadmap-short-name']);
+});
+
+test('rule 8 — the template placeholder is left to rule 7, not reported twice', () => {
+  // Under optional the skeleton is legitimate (rule 7's own reasoning), so the
+  // unfilled `[<project>]` link must not fail the repo through the back door.
+  const text = linear('[<project>](<linear-project-url>)', 'team `<team>`');
+  assert.deepEqual(rules(repo(text, 'design-vault')), []);
+});
+
+test('rule 8 — a GitHub board is not asked for a short name', () => {
+  assert.deepEqual(rules(repo(filled())), []);
+});
+
 // --- the parser -------------------------------------------------------------
 
 test('sectionTable distinguishes an absent heading from a heading with no table', () => {

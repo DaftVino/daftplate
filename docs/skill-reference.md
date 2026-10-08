@@ -167,6 +167,24 @@ repos that need them.
 
 **daftkit disposition:** v1.1 portable
 
+### dress
+
+**Purpose:** Dress a newly filed GitHub issue in a repo with a Linear board by filling in its missing Linear project and priority, reading the result back and reporting it. On every other repo, it is a silent no-op.
+
+**Invocation:** `/dress <N…>`, "dress the issue", or "dress it in Linear". `/handoff` calls it before writing its note, and `standards-change` calls it after a flush.
+
+**Inputs / outputs:** `scripts/board.mjs <N> --wait` first reads the `ROADMAP.md` `Board:` line for the short name, team key and project. It reads priority from the issue template and waits up to three minutes for the sync's linkback comment, which supplies the Linear key. The session confirms that the Linear issue's GitHub attachment matches the requested issue, sets only missing values, and reads the issue back. If the caller supplied a milestone or blocking relations, it sets those too; otherwise it reports that they still need a human. Output is one line per issue in the repo's `<short>-<N>` form.
+
+**Failure modes:** With no `ROADMAP.md`, or when the `Board:` line does not name Linear, it produces no output, makes no GitHub or Linear request, and asks no question. It never fails its caller:
+
+- If no linkback appears within three minutes, it reports the issue as undressed and leaves it to the 24-hour backstop.
+- If no Linear tool is connected, it reports that the issue could not be dressed from this session.
+- If the template supplies no priority, it asks the user; without an answer, it leaves priority unset and says so.
+
+It never computes a Linear key from a GitHub number and never overwrites a project or priority somebody already set.
+
+**daftkit disposition:** v1.5 portable
+
 ### enroll
 
 **Purpose:** Bring a repository daftplate never scaffolded under management, by composing what the templates would produce today, comparing that against the bytes already in the repo, and recording the result as a new `.daftplate.json`. It creates the manifest `/sync-standards` needs; it is the *start* of management, not the whole of it.
@@ -197,7 +215,7 @@ repos that need them.
 
 **Invocation:** "handoff", "wrap up", or a phase is complete.
 
-**Inputs / outputs:** Appends one dated `###` entry to the governing plan document's `## Handoff log` (`docs/designs/YYYY-MM-DD-slug.md`), covering branch/merge state, what shipped, what the plan got wrong (marked **do not revert**), what was discovered, what's still open, and the next phase's read manifest. Also runs gstack `/context-save` and commits the note.
+**Inputs / outputs:** Appends one dated `###` entry to the governing plan document's `## Handoff log` (`docs/designs/YYYY-MM-DD-slug.md`), covering branch/merge state, what shipped, what the plan got wrong (marked **do not revert**), what was discovered, what's still open, and the next phase's read manifest. Before writing, invokes `/dress` on the issues this session filed, which does nothing off the Linear variant. Also runs gstack `/context-save` and commits the note.
 
 **Failure modes:** If the work has no plan document because none was needed, says so and writes the state into the PR description instead — never creates a design doc solely to hold a handoff. Commits the note even when nothing else is ready to commit, since an uncommitted handoff note doesn't count as one.
 
@@ -356,6 +374,7 @@ These five ship inside the `app-monolith` profile's files and land in a scaffold
 | daftplate | user-level | Show every daftplate/daftkit setting on one screen and save a batch of edits | not portable (its menu derives ownership from the checkout's own tree) |
 | deliberate | user-level | Argue a contested plan/design through three Codex archetypes, chaired by the agent | deferred to v1.1 (needs script vendoring) |
 | diagram | user-level | Analyze a repo through a lens and render an editable `.excalidraw` (structure working board / flowchart / ER / sequence) | v1.1 portable |
+| dress | user-level | Set and verify a new issue's missing Linear project and priority; silent no-op on repos without a Linear board | v1.5 portable |
 | enroll | user-level | Measure an existing repo against the real scaffold output and record it as a manifest | not portable (composes scaffold output from a daftplate checkout) |
 | gas-deploy | user-level | Deploy a Google Apps Script web app via clasp, avoiding ID and `/exec`-vs-`/dev` traps | v1.0 portable |
 | handoff | user-level | Write a durable session handoff note at phase end | v1.0 portable |

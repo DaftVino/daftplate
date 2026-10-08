@@ -24,6 +24,14 @@ Each phase row states its files-to-read with approximate sizes; estimated contex
 
 Plans go through `/plan-eng-review` before any code is written; riskier or more visible changes add `/plan-ceo-review`, `/plan-design-review`, or `/plan-devex-review` as relevant, or `/autoplan` for all of them at once.
 
+## Tracking issues on a Linear board
+
+Most repos track work on a GitHub Project and refer to an issue as `#N`. A repo can instead keep its board in Linear; the single `Board:` line in `ROADMAP.md` says which system it uses (repo-standards §6.5.1). Issues are still created in GitHub, but their written identifier and post-filing workflow change.
+
+**One name per issue.** Refer to an issue as `<short>-<N>`, as in `daftplate-357`, wherever a person will read it: pull-request bodies, comments, handoff notes, commit bodies and chat. `<short>` is the project link text on the `Board:` line, and `N` is the GitHub number. Pull requests use the same form because GitHub draws issue and pull-request numbers from one sequence. Do not put the Linear key in prose or compute either number from the other. Keep the machine-parsed closing footer as `Fixes #N`.
+
+**Dress each new issue.** The sync initially creates the Linear issue without a project or priority. `/dress <N>` waits up to three minutes for the sync's linkback comment — the GitHub comment that links to the Linear issue — then confirms the GitHub attachment. It sets a missing project from the `Board:` line and a missing priority from the issue template, or asks you, before reading the values back. It never overwrites values somebody already set. `/handoff` dresses issues filed during the session, `standards-change` dresses issues created by a flush, and a reminder follows an interactive `gh issue create`. If dressing cannot finish, the issue remains subject to the 24-hour triage backstop. On a repo without a Linear `Board:` line, `/dress` produces no output, makes no network request and asks no question.
+
 ## Shipping
 
 Work happens on a short-lived branch off `main` (`type/short-slug`, matching the Conventional Commits type), never committed to directly. Commits follow `type(scope): verb object [qualifier]` — lowercase, imperative, the object named from the diff, an optional qualifier only when the object alone is ambiguous, and `Fixes #N` as a footer rather than part of the summary. A summary has to pass two tests: a reader who hasn't seen the branch could predict the diff from it alone, and no word in it could be deleted without losing information — which is what rules out intention words (`dogfood`), effort words (`improve`, `clean up`), and filler (`various`, `properly`).

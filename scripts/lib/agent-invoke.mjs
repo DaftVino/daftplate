@@ -616,18 +616,19 @@ const WHY = {
  * The report a refused run files. Nothing publishes it here — Phase 4 owns every
  * outbound call — so this returns a string and writes nothing.
  *
- * **The Linear key is never computed.** The GitHub and Linear sequences drift
- * (CLAUDE.md), so `#N (FORGE-M)` is rendered only when a caller supplies the key
- * it read off the board, and `#N` alone otherwise. Deriving `FORGE-M` from `N`
- * would produce a plausible identifier naming somebody else's issue.
+ * **The issue is named `<short>-<N>` on a Linear-variant repo, `#N` elsewhere**
+ * (§6.5.1, ADR 0014), the same rule as publish-run.mjs's `issueReference`. The Linear key
+ * never appears, and neither number is ever computed from the other.
  *
  * **It ends at its last substantive line.** No attribution footer, no trailer, no
  * session URL. Phase 4 assembles bodies for `--body-file`, which walks straight
  * past the hook that reads `tool_input.command`, so the property is pinned here
  * where the string is built rather than where it is sent.
  */
-export function formatUnderspecifiedReport({ issue, linearKey = null, reason, document = null, looked = [], runId = null }) {
-  const ref = linearKey ? `#${issue} (${linearKey})` : `#${issue}`;
+export function formatUnderspecifiedReport({ issue, shortName = null, reason, document = null, looked = [], runId = null }) {
+  // Inline rather than imported: publish-run.mjs imports this module, and its
+  // `issueReference` is the same one line.
+  const ref = shortName ? `${shortName}-${issue}` : `#${issue}`;
   const lines = [
     `No acceptance criteria could be sourced for ${ref}, so this run implemented`,
     'nothing, pushed no branch and opened no pull request.',
@@ -666,7 +667,7 @@ export function formatUnderspecifiedReport({ issue, linearKey = null, reason, do
  * step names, so a refusal naming no branch is a refusal that cannot be published
  * by a later step reading the field optimistically.
  */
-export function runGeneration({ repoRoot, runId, issue, worktree, branch, linearKey = null, prompt, extraArgs = [] }, opts = {}) {
+export function runGeneration({ repoRoot, runId, issue, worktree, branch, shortName = null, prompt, extraArgs = [] }, opts = {}) {
   const sourced = sourceAcceptanceCriteria(issue, { worktree });
   if (!sourced.ok) {
     return {
@@ -677,7 +678,7 @@ export function runGeneration({ repoRoot, runId, issue, worktree, branch, linear
       published: false,
       outcome: OUTCOME_REPORTED,
       report: formatUnderspecifiedReport({
-        issue: issue?.number, linearKey, reason: sourced.reason,
+        issue: issue?.number, shortName, reason: sourced.reason,
         document: sourced.document ?? null, looked: sourced.looked ?? [], runId,
       }),
     };
@@ -697,7 +698,7 @@ export function runGeneration({ repoRoot, runId, issue, worktree, branch, linear
       isolation: verified,
       report: formatUnderspecifiedReport({
         issue: issue?.number,
-        linearKey,
+        shortName,
         reason: verified.reason,
         looked: ['a live `git ls-remote`', 'a live `gh auth status`'],
         runId,

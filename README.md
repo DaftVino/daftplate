@@ -48,7 +48,7 @@ node scripts/install-skills.mjs       # install the agent skills to ~/.claude/sk
 
 - [Introduction](docs/introduction.md) — the non-technical story
 - [Setup guide](docs/setup-guide.md) — prerequisites, installing the skills, the statusline
-- [Workflow guide](docs/workflow-guide.md) — the day-to-day loop: new project, orient, work, handoff, ship
+- [Workflow guide](docs/workflow-guide.md) — new projects, daily sessions, context-budgeted planning, tracking issues on a Linear board, and shipping
 - [Architecture](docs/architecture.md) — layer composition, skill internals, extending the system
 - [Skill reference](docs/skill-reference.md) — every skill: purpose, invocation, inputs/outputs, failure modes
 - [Development history](docs/development-history.md) — how it was built, phase by phase

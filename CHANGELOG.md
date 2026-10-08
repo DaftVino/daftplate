@@ -4,6 +4,31 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-10-08
+
+### Changed
+
+- **Repositories with a Linear board now use one issue identifier: `<short>-<N>`, as in `daftplate-357`.** ADR 0014 replaces the former two-part form. `<short>` is the project link text on the repository's `ROADMAP.md` `Board:` line, and `N` is the GitHub issue or pull-request number.
+  - Use the form wherever a person reads the reference: pull-request bodies, comments, handoff notes, commit bodies and status reports.
+  - The Linear key no longer appears in prose, and the GitHub and Linear numbers are never computed from each other.
+  - The machine-parsed `Fixes #N` footer and the rule against issue references in commit summaries are unchanged. Repositories with GitHub Projects continue to use `#N`, and existing prose is not rewritten.
+- **Generated issue references now follow the same rule.** The delegated fixer uses `<short>-<N>` on repositories with a Linear board and `#N` elsewhere. Pull-request titles still omit issue references, while version strings such as `daftplate-1.10.0` remain valid.
+- **Workflow guidance and scaffolded templates now use the new identifier.** The public decision log records ADR 0014 and its rationale.
+
+### Added
+
+- **`/dress` for newly filed issues on repositories with a Linear board.**
+  - It finds the Linear issue through the sync's linkback comment, confirms the GitHub attachment, sets a missing project from the `Board:` line, and sets a missing priority from the issue template or asks the user.
+  - It waits up to three minutes for the linkback, checking every twenty seconds, then reads the result back and reports one line per issue in `<short>-<N>` form.
+  - It never computes a Linear key or overwrites a project or priority that somebody already set.
+  - If the `Board:` line does not name Linear, or the repository has no roadmap, it produces no output, makes no network request and asks no question.
+  - `/handoff` dresses issues filed during the session before writing its note, and `standards-change` dresses issues created by a flush. daftkit 1.5 ships the skill.
+- **A reminder after `gh issue create`.** When `/dress` is installed, a user-level hook names the new issue and suggests the command to run. It does not block the command or turn a reminder failure into a command failure.
+  - The reminder ignores help output, quoted text, heredoc bodies and issue-comment URLs. It remains silent on repositories without a Linear board and when no issue URL was created.
+  - Issues filed outside a session, or by a script invoked from one, may not trigger the reminder. The existing 24-hour rule remains the backstop: an issue still undressed after that point requires triage.
+- **Validation for the new identifier and `Board:` format.** On repositories with a Linear board, prompt validation recognizes `<short>-<N>` and rejects bare issue numbers or Linear keys in prose. Behavior on every other repository is unchanged, and a golden test captured from the previous release pins that. Roadmap validation also requires the project link text to be a lowercase short name and the team key to be backticked.
+- Suite **2184 → 2269** (2267 passing, 2 skipped, 0 failing) on Windows. 43 mutants across the release, all killed at a non-zero exit, every restore hash-verified. `node scripts/verify-templates.mjs .` prints `clean`.
+
 ## [1.10.0] — 2026-09-08
 
 ### Added

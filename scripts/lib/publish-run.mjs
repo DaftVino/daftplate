@@ -34,7 +34,8 @@
 // body file walks straight past it. `assertNoAttribution` is the replacement gate
 // and it runs before any outbound call, on every body, without exception.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { linearBoard, SHORT_NAME } from '../check-roadmap.mjs';
 import { join, resolve, dirname } from 'node:path';
 import {
   runsRoot, agentRoot, assertRunIdAgent, OUTCOME_PUBLISHED, OUTCOME_REPORTED,
@@ -535,14 +536,24 @@ const WHY_NO_REPRODUCTION = {
   [REPRODUCTION_REFUSALS.NOT_MEASURED]: 'the replay against the base commit could not be run at all',
 };
 
-/** `#N (FORGE-M)` where a human reads it, `#N` alone where no key was supplied.
+/** `<short>-<N>` on a Linear-variant repo, `#N` on any other (§6.5.1, ADR 0014).
  *
- *  **The Linear key is never computed.** The two sequences drift (repo-standards
- *  §6.5.1, and CLAUDE.md says so at the top), so deriving `FORGE-M` from `N`
- *  would produce a plausible identifier naming somebody else's issue. It is
- *  rendered only from a key a caller read off the board. */
-export function issueReference(issue, linearKey = null) {
-  return linearKey ? `#${issue} (${linearKey})` : `#${issue}`;
+ *  **The Linear key never appears.** It was rendered here as `#N (FORGE-M)` until
+ *  ADR 0014 took it out of prose. The written form is built from the GitHub
+ *  number alone, and neither number is ever computed from the other. */
+export function issueReference(issue, shortName = null) {
+  return shortName ? `${shortName}-${issue}` : `#${issue}`;
+}
+
+/** The repo's short name: its ROADMAP.md `Board:` line's project link text, when
+ *  that line names Linear and the text is a slug. Null on any other repo, which is
+ *  what keeps a GitHub-Projects repo's generated prose exactly as it was. The parse
+ *  is check-roadmap.mjs's, which the parity test already pins. */
+export function repoShortName(repoRoot) {
+  const path = join(String(repoRoot ?? ''), 'ROADMAP.md');
+  if (!repoRoot || !existsSync(path)) return null;
+  const board = linearBoard(readFileSync(path, 'utf8'));
+  return board?.shortName && SHORT_NAME.test(board.shortName) ? board.shortName : null;
 }
 
 /**
@@ -552,9 +563,14 @@ export function issueReference(issue, linearKey = null) {
  * summary line, and a squash merge makes this title exactly that. The branch
  * carries the number, the footer carries the link, and neither needs the summary.
  */
-export function pullRequestTitle(branch, issueTitle) {
+export function pullRequestTitle(branch, issueTitle, shortName = null) {
   const type = String(branch ?? '').split('/')[0] || 'fix';
+  // The ADR 0014 form is an issue reference too, so §4.1 bans it from the summary
+  // line as firmly as `#N`. The short name is a slug, so it needs no escaping. The
+  // trailing guard is the validator's: `daftplate-1.10.0` is a release, not issue 1.
+  const own = shortName ? new RegExp(`\\b${shortName}-\\d+(?![\\w-]|\\.\\d)`, 'g') : null;
   const summary = String(issueTitle ?? '')
+    .replace(own ?? /(?!)/g, '')
     .replace(/\(?\b[A-Z]{2,}-\d+\b\)?/g, '')
     .replace(/#\d+/g, '')
     .replace(/\s+/g, ' ')
@@ -582,17 +598,16 @@ function fence(text, lines = 16) {
  * The pull request body.
  *
  * `Fixes #N` is the last line and is the bare GitHub number: the footer is
- * machine-parsed, §6.5.1 exempts it from the dual identifier explicitly, and a
- * `Fixes #193 (FORGE-259)` closes nothing. The dual identifier is in the prose
- * above it, where a human reads it.
+ * machine-parsed, and §6.5.1 keeps it out of the identifier rule explicitly. The
+ * `<short>-<N>` form is in the prose above it, where a human reads it.
  *
  * It ends there, and `assertNoAttribution` is what holds it to that.
  */
 export function formatPullRequestBody({
-  issue, linearKey = null, branch, baseCommit, headCommit = null, runId = null,
+  issue, shortName = null, branch, baseCommit, headCommit = null, runId = null,
   criteria = [], reproduction, agentStatus = null,
 }) {
-  const ref = issueReference(issue, linearKey);
+  const ref = issueReference(issue, shortName);
   const short = (sha) => (sha ? String(sha).slice(0, 8) : 'unknown');
   const lines = [
     `Delegated fix for \`${ref}\`, pushed and opened by the runner's publisher`,
@@ -642,9 +657,9 @@ export function formatPullRequestBody({
  * did not say where it is would be reporting a dead end.
  */
 export function formatNoReproductionComment({
-  issue, linearKey = null, reason, reproduction = {}, runId = null, worktree = null,
+  issue, shortName = null, reason, reproduction = {}, runId = null, worktree = null,
 }) {
-  const ref = issueReference(issue, linearKey);
+  const ref = issueReference(issue, shortName);
   const tests = reproduction.tests ?? [];
   const lines = [
     `This run produced no reproduction for \`${ref}\`, so it pushed no branch and`,
@@ -798,7 +813,7 @@ function ghOf(opts) {
  */
 export function publishRun({
   repoRoot, worktree, branch, issue,
-  baseCommit = null, headCommit = null, runId = null, linearKey = null,
+  baseCommit = null, headCommit = null, runId = null, shortName = repoShortName(repoRoot),
   issueTitle = '', criteria = [], generation = null,
   remote = 'origin', base = 'main',
 }, opts = {}) {
@@ -829,7 +844,7 @@ export function publishRun({
   const reproduction = assessReproduction({ repoRoot, worktree, baseCommit, runId }, opts);
   if (!reproduction.ok) {
     const body = formatNoReproductionComment({
-      issue, linearKey, reason: reproduction.reason, reproduction, runId, worktree,
+      issue, shortName, reason: reproduction.reason, reproduction, runId, worktree,
     });
     const path = writeBody(repoRoot, runId, 'comment', body, opts);
     const argv = buildIssueCommentArgs({ issue, bodyFile: path });
@@ -856,12 +871,12 @@ export function publishRun({
 
   // 5. One pull request, always a draft.
   const body = formatPullRequestBody({
-    issue, linearKey, branch, baseCommit, headCommit: at, runId, criteria, reproduction,
+    issue, shortName, branch, baseCommit, headCommit: at, runId, criteria, reproduction,
     agentStatus: generation?.agent?.status ?? null,
   });
   const path = writeBody(repoRoot, runId, 'pr', body, opts);
   const prArgs = buildPrCreateArgs({
-    branch, base, title: pullRequestTitle(branch, issueTitle), bodyFile: path,
+    branch, base, title: pullRequestTitle(branch, issueTitle, shortName), bodyFile: path,
   });
   const opened = gh(prArgs, worktree);
   if (opened.status !== 0) {

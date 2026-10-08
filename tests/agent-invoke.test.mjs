@@ -642,16 +642,17 @@ test('AC 3 — a deliberately underspecified issue produces a report and no bran
   assert.match(result.report, /pushed no branch and opened no pull request/);
 });
 
-test('the report names the issue both ways only when the board supplied the key', () => {
-  // The GitHub and Linear sequences drift, so FORGE-M is never computed from N.
-  // Deriving one would produce a plausible identifier naming somebody else's issue.
-  const withKey = formatUnderspecifiedReport({
-    issue: 193, linearKey: 'FORGE-259', reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA,
+test('the report names the issue in the repo\'s form, and never with a Linear key', () => {
+  // ADR 0014: `<short>-<N>` on a Linear-variant repo, `#N` on any other. The key
+  // never appears in prose, and is never computed from the GitHub number.
+  const linear = formatUnderspecifiedReport({
+    issue: 193, shortName: 'daftplate', reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA,
   });
-  assert.match(withKey, /#193 \(FORGE-259\)/);
-  const without = formatUnderspecifiedReport({ issue: 193, reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA });
-  assert.match(without, /#193/);
-  assert.equal(/FORGE-/.test(without), false, 'a Linear key was invented from the GitHub number');
+  assert.match(linear, /sourced for daftplate-193,/);
+  assert.equal(/FORGE-|#193/.test(linear), false, 'the old form survived beside the new one');
+  const other = formatUnderspecifiedReport({ issue: 193, reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA });
+  assert.match(other, /sourced for #193,/);
+  assert.equal(/FORGE-|daftplate-/.test(other), false, 'an identifier was invented for a repo with no board');
 });
 
 test('the report ends at its last substantive line', () => {

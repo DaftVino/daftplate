@@ -79,19 +79,19 @@ function sourceLine(sourced) {
  * is told what it is being measured against before it is told how to proceed, so
  * the first instruction it reads is one it can already check itself against.
  *
- * `issueReference` is publish-run.mjs's, imported rather than restated — the
- * Linear key is rendered only from a key a caller read off the board, never
- * computed from the GitHub number, and one implementation of that rule is enough.
+ * `issueReference` is publish-run.mjs's, imported rather than restated: the issue
+ * is named `<short>-<N>` on a Linear-variant repo and `#N` elsewhere (ADR 0014),
+ * the Linear key never appears, and one implementation of that rule is enough.
  *
  * It ends at its last substantive line. No attribution footer, no trailer, no
  * session URL — this string reaches `recordInvocation`'s digest and, through the
  * run, the commits a reviewer reads.
  */
-export function composePrompt({ issue, branch, worktree, linearKey = null, sourced }) {
+export function composePrompt({ issue, branch, worktree, shortName = null, sourced }) {
   const criteria = sourced?.criteria ?? [];
   const title = issue?.title ? `: "${issue.title}"` : '';
   const lines = [
-    `You are an unattended fix run on ${issueReference(issue?.number, linearKey)}${title}.`,
+    `You are an unattended fix run on ${issueReference(issue?.number, shortName)}${title}.`,
     '',
     `The git worktree at \`${worktree}\` is yours, on branch \`${branch}\`. Everything`,
     'outside it belongs to somebody else. This run holds no authority to publish and',

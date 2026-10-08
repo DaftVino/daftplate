@@ -118,6 +118,37 @@ export function sectionTable(text, heading) {
   return { header, rows };
 }
 
+/** §6.5.1's short name: a lowercase slug. */
+export const SHORT_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * The Linear `Board:` paragraph's short name and team key, or null when the
+ * repo's board is not Linear. The paragraph runs from the `Board:` line to the
+ * next blank line, because a real one wraps — the team key can open the line
+ * after `team`.
+ *
+ * A copy, not an import: this file ships into scaffolded CI and imports nothing.
+ * The launch-pad validator and the dressing helper parse the same line, and a
+ * parity test in daftplate holds the three to one answer.
+ */
+export function linearBoard(text) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.startsWith('Board:'));
+  if (start === -1) return null;
+  const paragraph = [];
+  for (const line of lines.slice(start)) {
+    if (line.trim() === '') break;
+    paragraph.push(line);
+  }
+  const joined = paragraph.join(' ');
+  if (!/\bLinear\b/.test(joined)) return null;
+  const link = /\[([^\]\n]+)\]\(([^)\s]+)\)/.exec(joined);
+  return {
+    shortName: link ? link[1].trim() : null,
+    teamKey: /\bteam\s+`([A-Z][A-Z0-9]*)`/.exec(joined)?.[1] ?? null,
+  };
+}
+
 export function checkRoadmap(dir) {
   const { roadmap, reason } = resolveRequirement(dir);
   const path = join(dir, ROADMAP_FILE);
@@ -190,6 +221,34 @@ export function checkRoadmap(dir) {
         ? 'no line beginning `Board:` — keep one of the two blocks the template ships (§6.5 or §6.5.1)'
         : `${boards} lines begin \`Board:\`; keep exactly one and delete the other (§6.6)`,
     ));
+  }
+
+  // Rule 8. A Linear board's project link text is the repo's short name, and
+  // every issue the repo names is `<short>-<N>` (§6.5.1, ADR 0014), so it has to
+  // be a slug a reader can type and a validator can match. A display name such as
+  // `Daft Plate` would make the form unwritable. Placeholders are rule 7's, and
+  // reported there only under `required`, so they are skipped here rather than
+  // given two owners.
+  if (boards === 1) {
+    const board = linearBoard(text);
+    if (board && !/^<[^<>]*>$/.test(board.shortName ?? '')) {
+      if (board.shortName === null || !SHORT_NAME.test(board.shortName)) {
+        violations.push(violation(
+          'roadmap-short-name',
+          ROADMAP_FILE,
+          board.shortName === null
+            ? 'the Linear `Board:` line has no `[name](url)` project link; its link text is the repo\'s short name (§6.5.1)'
+            : `the Linear \`Board:\` line's project link text \`${board.shortName}\` is not a lowercase slug; it is the repo's short name, written in every \`<short>-<N>\` (§6.5.1)`,
+        ));
+      }
+      if (board.teamKey === null) {
+        violations.push(violation(
+          'roadmap-short-name',
+          ROADMAP_FILE,
+          'the Linear `Board:` line names no backticked team key (team `KEY`); the launch-pad validator reads it to refuse Linear keys in prose',
+        ));
+      }
+    }
   }
 
   // Rule 7. Only under `required`: an `optional` repo may keep the skeleton or

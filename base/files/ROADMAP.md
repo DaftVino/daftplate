@@ -30,7 +30,10 @@ Milestones, and each milestone mirrors a section of this file.
 
 <!-- Keep this one INSTEAD if the repo has adopted the Linear variant (§6.5.1),
      which requires its own ADR. Under that variant every issue named in this
-     file carries both identifiers, `#N (TEAM-M)`. -->
+     file, and in any prose a human reads, is written `<short>-<N>`: the project
+     link text below, a hyphen, and the GitHub number. That link text is the
+     repo's short name, so write it as a lowercase slug (`my-repo`), never a
+     display name. -->
 Board: issues are created in GitHub and managed in Linear (ADR <nnnn>) — the
 [<project>](<linear-project-url>) project, team `<team>`. GitHub is canonical for
 whether an issue exists; Linear is canonical for its state. Linear milestones

@@ -78,8 +78,8 @@ const FAILING_TEST = [
 ].join('\n');
 
 /** A committed fixture repository with the pre-push hook the real push exercises. */
-function fixtureRepo() {
-  const root = makeRepo({ 'README.md': '# fixture\n' });
+function fixtureRepo(files = { 'README.md': '# fixture\n' }) {
+  const root = makeRepo(files);
   git(['init', '--initial-branch=main', root]);
   git(['config', 'user.email', 'test@example.invalid'], root);
   git(['config', 'user.name', 'Test'], root);
@@ -161,7 +161,7 @@ test('the prompt states the acceptance criteria before it states a single step',
   // trailing appendix. Step 1 asks the run to state what it was asked for, and a
   // brief that gives the instruction before the content makes that unanswerable.
   const prompt = composePrompt({
-    issue: ISSUE, branch: 'fix/5-the-thing', worktree: 'X:/w', linearKey: 'FORGE-259',
+    issue: ISSUE, branch: 'fix/5-the-thing', worktree: 'X:/w',
     sourced: { ok: true, source: 'issue-body', criteria: ['saving a record does not throw'] },
   });
 
@@ -170,18 +170,43 @@ test('the prompt states the acceptance criteria before it states a single step',
   assert.equal(AGENT_STEPS[0], 'State the acceptance criteria before implementing anything.');
 });
 
-test('the prompt names the issue with both identifiers and never computes one', () => {
-  const withKey = composePrompt({
-    issue: ISSUE, branch: 'b', worktree: 'w', linearKey: 'FORGE-259', sourced: { ok: true, criteria: ['a'] },
+test('the prompt names the issue in the repo\'s form and never computes a Linear key', () => {
+  // ADR 0014: `<short>-<N>` on a Linear-variant repo, `#N` elsewhere.
+  const linear = composePrompt({
+    issue: ISSUE, branch: 'b', worktree: 'w', shortName: 'daftplate', sourced: { ok: true, criteria: ['a'] },
   });
-  const without = composePrompt({ issue: ISSUE, branch: 'b', worktree: 'w', sourced: { ok: true, criteria: ['a'] } });
+  const other = composePrompt({ issue: ISSUE, branch: 'b', worktree: 'w', sourced: { ok: true, criteria: ['a'] } });
 
-  assert.match(withKey, /#5 \(FORGE-259\)/);
-  assert.match(without, /#5/);
-  // Mutation killed: deriving `FORGE-5` from the GitHub number. The two sequences
-  // drift, so a computed key names somebody else's issue plausibly enough to be
-  // believed.
-  assert.doesNotMatch(without, /FORGE-/);
+  assert.match(linear, /fix run on daftplate-5:/);
+  assert.match(other, /fix run on #5:/);
+  // Neither carries a Linear key: under ADR 0014 it never appears in prose, and
+  // a key derived from the GitHub number names somebody else's issue.
+  assert.doesNotMatch(linear, /FORGE-/);
+  assert.doesNotMatch(other, /FORGE-|daftplate-/);
+});
+
+test('a run on a Linear-variant repo names the issue from the repo\'s own Board: line', () => {
+  // Through the whole loop, and asserted on the comment a human reads. runLoop
+  // takes no identifier parameter: the form is a fact about the repo (ADR 0014),
+  // so nothing a caller passes can put a Linear key back into the prose.
+  const repo = fixtureRepo({
+    'README.md': '# fixture\n',
+    'ROADMAP.md': 'Board: issues are created in GitHub and managed in Linear (ADR 0006) — the\n'
+      + '[daftplate](https://linear.app/x/project/daftplate-1) project, team `FORGE`.\n',
+  });
+  const io = runsFor();
+  bareRemote(repo);
+  const rec = ghRecorder({ status: 0, stdout: '', stderr: '' });
+  const result = runLoop({ repoRoot: repo, issue: VAGUE_ISSUE, linearKey: 'FORGE-260' }, {
+    ...io, runId: newRunId('fixer', 7), gate: fixtureGate, lsRemote: measuredIsolation,
+    ghAuth: measuredGhIsolation, gh: rec.gh,
+    spawn: () => assert.fail('an agent was invoked for an issue with no acceptance criteria'),
+  });
+  assert.equal(result.ok, false);
+  const args = rec.calls[0].args;
+  const body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');
+  assert.match(body, new RegExp(`for daftplate-${VAGUE_ISSUE.number}\\b`));
+  assert.doesNotMatch(body, /FORGE-/, 'a caller-supplied key reached the prose');
 });
 
 test('the prompt names a sourcing document when the criteria came from one', () => {
@@ -384,7 +409,7 @@ test('a run with a reproduction claims, is briefed, publishes and is reaped', ()
   const rec = ghRecorder();
   const runId = newRunId('fixer', 5);
 
-  const result = runLoop({ repoRoot: repo, issue: ISSUE, linearKey: 'FORGE-259' }, {
+  const result = runLoop({ repoRoot: repo, issue: ISSUE }, {
     ...io, runId, gate: fixtureGate, spawn: agent.spawn, lsRemote: measuredIsolation,
     ghAuth: measuredGhIsolation, gh: rec.gh,
   });
@@ -422,7 +447,7 @@ test('the record afterwards names what ran, under what authority, and what was p
   const rec = ghRecorder();
   const runId = newRunId('fixer', 5);
 
-  const result = runLoop({ repoRoot: repo, issue: ISSUE, linearKey: 'FORGE-259' }, {
+  const result = runLoop({ repoRoot: repo, issue: ISSUE }, {
     ...io, runId, gate: fixtureGate, spawn: agent.spawn, lsRemote: measuredIsolation,
     ghAuth: measuredGhIsolation, gh: rec.gh,
   });
@@ -451,7 +476,7 @@ test('the record afterwards names what ran, under what authority, and what was p
   // The prompt is digested, not stored — and the digest is of the brief this
   // phase composes, which is what ties the record to the instructions.
   const expected = composePrompt({
-    issue: ISSUE, branch: result.branch, worktree: result.worktree, linearKey: 'FORGE-259',
+    issue: ISSUE, branch: result.branch, worktree: result.worktree,
     sourced: { ok: true, source: 'issue-body', criteria: ['saving a record does not throw', 'the existing suite stays green'] },
   });
   assert.equal(record.ran.prompt.sha256, createHash('sha256').update(expected).digest('hex'));
@@ -563,7 +588,7 @@ test('an underspecified issue files a comment, pushes nothing and records no arg
   const rec = ghRecorder({ status: 0, stdout: '', stderr: '' });
   const runId = newRunId('fixer', 6);
 
-  const result = runLoop({ repoRoot: repo, issue: VAGUE_ISSUE, linearKey: 'FORGE-260' }, {
+  const result = runLoop({ repoRoot: repo, issue: VAGUE_ISSUE }, {
     ...io, runId, gate: fixtureGate, lsRemote: measuredIsolation,
     ghAuth: measuredGhIsolation, gh: rec.gh,
     spawn: () => assert.fail('an agent was invoked for an issue with no acceptance criteria'),

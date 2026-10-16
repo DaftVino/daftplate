@@ -171,24 +171,26 @@ test('the prompt states the acceptance criteria before it states a single step',
 });
 
 test('the prompt names the issue in the repo\'s form and never computes a Linear key', () => {
-  // ADR 0014: `<short>-<N>` on a Linear-variant repo, `#N` elsewhere.
+  // ADR 0015: the Linear key on a Linear-variant repo, `#N` elsewhere.
   const linear = composePrompt({
-    issue: ISSUE, branch: 'b', worktree: 'w', shortName: 'daftplate', sourced: { ok: true, criteria: ['a'] },
+    issue: ISSUE, branch: 'b', worktree: 'w', linear: { linear: true, key: 'FORGE-512', repo: 'o/r' },
+    sourced: { ok: true, criteria: ['a'] },
   });
   const other = composePrompt({ issue: ISSUE, branch: 'b', worktree: 'w', sourced: { ok: true, criteria: ['a'] } });
 
-  assert.match(linear, /fix run on daftplate-5:/);
+  assert.match(linear, /fix run on FORGE-512:/);
   assert.match(other, /fix run on #5:/);
-  // Neither carries a Linear key: under ADR 0014 it never appears in prose, and
-  // a key derived from the GitHub number names somebody else's issue.
-  assert.doesNotMatch(linear, /FORGE-/);
+  // Neither carries a second identifier, and the key is the context's, never one
+  // derived from the GitHub number, which would name somebody else's issue.
+  assert.doesNotMatch(linear, /FORGE-5\b|daftplate-|#5\b/);
   assert.doesNotMatch(other, /FORGE-|daftplate-/);
 });
 
 test('a run on a Linear-variant repo names the issue from the repo\'s own Board: line', () => {
   // Through the whole loop, and asserted on the comment a human reads. runLoop
-  // takes no identifier parameter: the form is a fact about the repo (ADR 0014),
-  // so nothing a caller passes can put a Linear key back into the prose.
+  // takes no identifier parameter: the board is a fact about the repo and the key
+  // is read from the issue's linkback (ADR 0015), so a caller-supplied key is
+  // ignored and never reaches the prose.
   const repo = fixtureRepo({
     'README.md': '# fixture\n',
     'ROADMAP.md': 'Board: issues are created in GitHub and managed in Linear (ADR 0006) — the\n'
@@ -197,16 +199,27 @@ test('a run on a Linear-variant repo names the issue from the repo\'s own Board:
   const io = runsFor();
   bareRemote(repo);
   const rec = ghRecorder({ status: 0, stdout: '', stderr: '' });
+  const reads = [];
+  const ghRead = (args) => {
+    reads.push(args.join(' '));
+    if (args[0] === 'repo') return { status: 0, stdout: 'o/r\n' };
+    return { status: 0, stdout: JSON.stringify([{ user: { login: 'linear-code[bot]' },
+      body: '[FORGE-777](https://linear.app/x/issue/FORGE-777/t)' }]) };
+  };
   const result = runLoop({ repoRoot: repo, issue: VAGUE_ISSUE, linearKey: 'FORGE-260' }, {
     ...io, runId: newRunId('fixer', 7), gate: fixtureGate, lsRemote: measuredIsolation,
-    ghAuth: measuredGhIsolation, gh: rec.gh,
+    ghAuth: measuredGhIsolation, gh: rec.gh, ghRead,
     spawn: () => assert.fail('an agent was invoked for an issue with no acceptance criteria'),
   });
   assert.equal(result.ok, false);
   const args = rec.calls[0].args;
   const body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');
-  assert.match(body, new RegExp(`for daftplate-${VAGUE_ISSUE.number}\\b`));
-  assert.doesNotMatch(body, /FORGE-/, 'a caller-supplied key reached the prose');
+  assert.match(body, /for FORGE-777\b/);
+  assert.doesNotMatch(body, /FORGE-260/, 'a caller-supplied key reached the prose');
+  assert.doesNotMatch(body, new RegExp(`daftplate-${VAGUE_ISSUE.number}\\b`));
+  // The linkback was read through the read seam, never the publisher's gh.
+  assert.ok(reads.includes(`api repos/{owner}/{repo}/issues/${VAGUE_ISSUE.number}/comments`));
+  assert.equal(rec.calls.some((c) => c.args[0] === 'api'), false, 'the linkback read went through the publisher');
 });
 
 test('the prompt names a sourcing document when the criteria came from one', () => {

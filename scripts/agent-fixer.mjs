@@ -24,7 +24,8 @@ import {
   RUN_STATES, RECORD_REFUSALS,
 } from './lib/run-record.mjs';
 import { sourceAcceptanceCriteria, runGeneration } from './lib/agent-invoke.mjs';
-import { publishRun, writeRunAccount, repoShortName } from './lib/publish-run.mjs';
+import { publishRun, writeRunAccount } from './lib/publish-run.mjs';
+import { linearContext } from './lib/issue-reference.mjs';
 import { composePrompt } from './lib/agent-brief.mjs';
 import { agentById, AGENTS } from './lib/agent-registry.mjs';
 import { recordEndOnExit } from './lib/agent-state.mjs';
@@ -518,9 +519,11 @@ export function runLoop({
 
   const number = issue?.number;
   const title = issue?.title ?? '';
-  // Read once from the repo's own Board: line (ADR 0014), never from the caller:
-  // the identifier a human reads is a fact about the repo, not a run parameter.
-  const shortName = repoShortName(repoRoot);
+  // Read once, never from the caller (ADR 0015): the board is a fact about the
+  // repo and the key is the issue's linkback, so no run parameter can put a key in
+  // the prose. Through `opts.ghRead`, not `opts.gh`: the publisher's gh is the
+  // outbound seam and is allowlisted to two commands.
+  const linear = linearContext(repoRoot, number, opts.ghRead ?? defaultGh);
 
   const held = readClaim(repoRoot, number, opts);
   if (held) return { ok: false, reason: LOOP_REFUSALS.ALREADY_CLAIMED, holder: held, published: false, outcome: null };
@@ -549,7 +552,7 @@ export function runLoop({
 
   const opened = openRunRecord({
     repoRoot, runId, issue: number, issueTitle: title || null,
-    branch, worktree: tree.path, baseCommit: tree.baseCommit,
+    branch, worktree: tree.path, baseCommit: tree.baseCommit, linearKey: linear.key,
   }, opts);
   if (!opened.ok) {
     // Not reaped and not released. A run with no record is a run nobody can audit,
@@ -579,11 +582,11 @@ export function runLoop({
   // second way to be right about criteria it does not decide.
   const sourced = sourceAcceptanceCriteria(issue, { worktree: tree.path });
   const prompt = sourced.ok
-    ? composePrompt({ issue, branch, worktree: tree.path, shortName, sourced })
+    ? composePrompt({ issue, branch, worktree: tree.path, linear, sourced })
     : '';
 
   const generation = runGeneration({
-    repoRoot, runId, issue, worktree: tree.path, branch, shortName,
+    repoRoot, runId, issue, worktree: tree.path, branch, linear,
     prompt, extraArgs: settings.extraArgs,
   }, opts);
 
@@ -611,7 +614,7 @@ export function runLoop({
 
   const publish = publishRun({
     repoRoot, worktree: tree.path, branch: generation.branch, issue: number,
-    baseCommit: tree.baseCommit, runId, shortName, issueTitle: title,
+    baseCommit: tree.baseCommit, runId, linear, issueTitle: title,
     criteria: generation.criteria ?? [], generation, remote, base,
   }, opts);
 
@@ -920,8 +923,8 @@ function runDelegated(args, { authority, loop, scheduled, ...injected }) {
       `issue-unreadable: ${detail.stdout.trim().slice(0, 200)}`)]);
   }
 
-  // `linearKey` stays null. It is a record field only: under ADR 0014 no prose this
-  // run writes carries a Linear key, and it is never computed from the GitHub number.
+  // The Linear key is read inside runLoop from the issue's linkback (ADR 0015),
+  // never passed in and never computed from the GitHub number.
   const outcome = loop({ repoRoot: args.repoRoot, issue: { ...issue, ...full }, type: args.type }, io);
   if (!outcome.ok) {
     // `generationReason` when there is one. `run-refused` alone told the operator of

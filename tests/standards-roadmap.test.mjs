@@ -87,7 +87,7 @@ test('§6.6 keeps the clauses it already carried', () => {
   assert.match(six6, /\*\*charter\*\*/);
 });
 
-test('§6.6.1 lists exactly the eight admissions, each as its own bolded entry', () => {
+test('§6.6.1 lists exactly the nine admissions, each as its own bolded entry', () => {
   const entries = [...notChecked.matchAll(/^- \*\*(.+?)\*\*/gm)].map((m) => m[1]);
   assert.deepEqual(entries, [
     'The five-row cap on `## Now`.',
@@ -107,6 +107,10 @@ test('§6.6.1 lists exactly the eight admissions, each as its own bolded entry',
     // given. Pinned as prose so adding an eighth admission and dropping this one
     // in the same change still fails.
     'Whether a *qualified* `owner/repo#N` in the launch pad is this repo\'s own issue.',
+    // FORGE-504, ADR 0015. The Linear-key half of the entry above: a key the
+    // resolver finds on no issue only warns, because a typo, another repository's
+    // key and search lag cannot be told apart.
+    'Whether a Linear key in the launch pad that resolves to no issue is wrong.',
     // ADR 0014's dressing step. Dressing is prompted in a session only, and the
     // reminder cannot see a `gh issue create` a script issues: both stated here so
     // the hook does not read as covering every way an issue is filed. (The entry
@@ -114,6 +118,10 @@ test('§6.6.1 lists exactly the eight admissions, each as its own bolded entry',
     // when the fleet was converted to the new form.)
     'Whether an issue filed outside a session is dressed.',
   ]);
+  // ADR 0015's interim entry, the tooling lagging the clause, left when the fleet
+  // was converted in plan Phase 4. An entry left behind would describe a gap that
+  // no longer exists, which reads as a gap nobody closed.
+  assert.doesNotMatch(notChecked, /Whether the tooling uses the Linear key yet/);
 });
 
 test('§6.6.1 says why an unadmitted partial rule is worse than an admitted convention', () => {
@@ -126,8 +134,8 @@ test('§6.6.1 says why an unadmitted partial rule is worse than an admitted conv
   // three of the seven entries are about the launch pad rather than the roadmap,
   // so the old phrase had been describing the wrong thing since the fifth.
   const stated = /the list below carries (\w+)/.exec(notChecked)?.[1];
-  assert.equal(stated, 'eight', 'the stated count must track the list below it');
-  assert.equal([...notChecked.matchAll(/^- \*\*(.+?)\*\*/gm)].length, 8);
+  assert.equal(stated, 'nine', 'the stated count must track the list below it');
+  assert.equal([...notChecked.matchAll(/^- \*\*(.+?)\*\*/gm)].length, 9);
 });
 
 test('§6.6.1 refuses to let a green check stand for a true roadmap', () => {

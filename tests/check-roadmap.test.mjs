@@ -198,7 +198,7 @@ test('rule 8 — a Linear board with a slug short name and a team key passes', (
   assert.deepEqual(rules(repo(linear('[daftplate](https://linear.app/x/project/daftplate-1)'))), []);
 });
 
-test('rule 8 — a display name is refused, because every <short>-<N> is written with it', () => {
+test('rule 8 — a display name is refused, because it names the Linear project /dress sets', () => {
   const violations = checkRoadmap(repo(linear('[Daft Plate](https://linear.app/x/project/daft-plate-1)'))).violations;
   assert.deepEqual(violations.map((v) => v.rule), ['roadmap-short-name']);
   assert.match(violations[0].message, /`Daft Plate` is not a lowercase slug/);

@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-10-16
+
+### Changed
+
+- **Repositories with a Linear board now name an issue by its Linear key, `<teamKey>-<M>`, as in `ENG-412`.** ADR 0015 replaces the `<short>-<N>` form from ADR 0014, which could not be found in Linear. The team key comes from the `ROADMAP.md` `Board:` line, and the number is read from the sync's linkback comment, never computed.
+  - One identifier per mention, never the GitHub number beside it. Until the sync gives a new issue its key, prose waits; if `/dress` times out, it writes the issue URL followed by `(pending Linear sync)`. A pull request is named by its URL.
+  - The `Fixes #N` footer, `type/N-slug` branch names and commit summaries are unchanged. Repositories with GitHub Projects keep `#N`, and existing prose is not rewritten.
+  - The standard, `CLAUDE.md`, the scaffolded quick-ref and roadmap template, and the workflow guide teach the new form. The scaffolded quick-ref drops the autolink tip, which only served the retired form.
+- **The delegated fixer names the issue by its Linear key** in the pull-request bodies, comments, reports and briefs it generates on a repository with a Linear board, read once per run from the issue's linkback comment. Before the sync lands, it uses the issue URL marked `(pending Linear sync)`. Elsewhere it still writes `#N`, and the `Fixes #N` footer is unchanged. The publisher still runs only its two allowed `gh` commands; the runner reads the linkback through a separate read seam.
+- **The launch-pad validator checks Linear keys.** Under a Linear board it accepts `<teamKey>-<M>` and checks it against a key map passed with `--issue-keys`: a key on a closed issue, or on more than one issue, fails `issue-closed`. A key no linkback carries, or a map that could not be built, is listed as *could not verify* and passes. A new `issue-short-form` rule refuses the retired `<short>-<N>`, and `issue-bare` now points at the key.
+  - `issue-linear-key` and `issue-unpaired` are removed. Off a Linear board, a Linear key is now ordinary text, which is the one change repositories with GitHub Projects see.
+  - `/dress` reports each issue by its Linear key, or by its URL followed by `(pending Linear sync)` when the linkback has not landed, so a session knows which key to write. `/handoff` lists what is still open the same way, and the reminder after `gh issue create` names the new issue by its URL, marked pending.
+  - `/dress`'s helper gains `board.mjs --resolve <KEY>...`, which builds the map from the sync's linkback comments with `gh` alone and prints `{ available, keys }`. Like dressing, it prints nothing on a repository without a Linear board. `/continuum` passes its output to the validator.
+
 ## [1.11.0] — 2026-10-08
 
 ### Changed

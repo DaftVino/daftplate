@@ -20,7 +20,7 @@
 // the prohibition against widening the permission mode is written without naming
 // what it forbids, and `tests/agent-loop.test.mjs` proves the composed prompt
 // survives the guard rather than leaving that to be discovered at the spawn.
-import { issueReference } from './publish-run.mjs';
+import { issueReference } from './issue-reference.mjs';
 
 /**
  * What the run does, in order. Step 1 is the one the plan singles out: a run that
@@ -79,19 +79,20 @@ function sourceLine(sourced) {
  * is told what it is being measured against before it is told how to proceed, so
  * the first instruction it reads is one it can already check itself against.
  *
- * `issueReference` is publish-run.mjs's, imported rather than restated: the issue
- * is named `<short>-<N>` on a Linear-variant repo and `#N` elsewhere (ADR 0014),
- * the Linear key never appears, and one implementation of that rule is enough.
+ * `issueReference` is issue-reference.mjs's, imported rather than restated: the
+ * issue is named by its Linear key on a Linear-variant repo, by its URL marked
+ * pending before the key exists, and `#N` elsewhere (ADR 0015). One
+ * implementation of that rule is enough.
  *
  * It ends at its last substantive line. No attribution footer, no trailer, no
  * session URL — this string reaches `recordInvocation`'s digest and, through the
  * run, the commits a reviewer reads.
  */
-export function composePrompt({ issue, branch, worktree, shortName = null, sourced }) {
+export function composePrompt({ issue, branch, worktree, linear = null, sourced }) {
   const criteria = sourced?.criteria ?? [];
   const title = issue?.title ? `: "${issue.title}"` : '';
   const lines = [
-    `You are an unattended fix run on ${issueReference(issue?.number, shortName)}${title}.`,
+    `You are an unattended fix run on ${issueReference(issue?.number, linear)}${title}.`,
     '',
     `The git worktree at \`${worktree}\` is yours, on branch \`${branch}\`. Everything`,
     'outside it belongs to somebody else. This run holds no authority to publish and',

@@ -91,20 +91,23 @@ export function reminderFor(input, roadmapText) {
   if (input?.tool_name !== 'Bash') return null;
   const command = input?.tool_input?.command;
   if (typeof command !== 'string' || !/\bgh\s+issue\s+create\b/.test(executableText(command))) return null;
-  const short = linearShortName(roadmapText);
-  if (short === null) return null;
+  // Only whether the board is Linear matters now; the short name is no longer
+  // written (ADR 0015).
+  if (linearShortName(roadmapText) === null) return null;
   const stdout = typeof input?.tool_response?.stdout === 'string' ? input.tool_response.stdout : '';
   // `gh issue create` prints the new issue's URL on success, and only then. No URL
   // means nothing was filed — a failed create, or `--help` — and a reminder about
   // an issue that does not exist is noise the session learns to ignore. Measured
   // live on 2026-10-07: `gh issue create --help` fired the first version.
-  const numbers = [...stdout.matchAll(FILED_URL)].map((m) => m[1]);
-  if (numbers.length === 0) return null;
-  const which = numbers.join(' ');
-  const named = short ? ` (${numbers.map((n) => `${short}-${n}`).join(', ')})` : '';
-  return `An issue was filed on a Linear-variant repo${named}. The GitHub Issues Sync lands it on the board `
+  const filings = [...stdout.matchAll(FILED_URL)];
+  if (filings.length === 0) return null;
+  const which = filings.map((m) => m[1]).join(' ');
+  // ADR 0015 names the issue by its Linear key, which the sync has not assigned
+  // yet at this moment, so the reminder names it by its URL, marked pending.
+  const named = filings.map((m) => `${m[0].trim()} (pending Linear sync)`).join(', ');
+  return `An issue was filed on a Linear-variant repo: ${named}. The GitHub Issues Sync lands it on the board `
     + `with no project and no priority. Run \`/dress ${which}\` now: it waits for the sync, sets project and `
-    + 'priority, and reads them back (repo-standards §6.5.1, ADR 0014).';
+    + 'priority, reads them back, and reports the Linear key to name it by (repo-standards §6.5.1, ADR 0015).';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

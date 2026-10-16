@@ -45,6 +45,7 @@ import { join, resolve, isAbsolute, normalize } from 'node:path';
 import {
   runsRoot, agentRoot, assertRunIdAgent, containedIn, OUTCOME_REPORTED,
 } from './worktree.mjs';
+import { issueReference } from './issue-reference.mjs';
 
 /** The one permission mode ADR 0008 row 1 permits an unattended run. Not a
  *  parameter: a mode a caller can choose is a mode a caller can choose wrong. */
@@ -616,19 +617,17 @@ const WHY = {
  * The report a refused run files. Nothing publishes it here — Phase 4 owns every
  * outbound call — so this returns a string and writes nothing.
  *
- * **The issue is named `<short>-<N>` on a Linear-variant repo, `#N` elsewhere**
- * (§6.5.1, ADR 0014), the same rule as publish-run.mjs's `issueReference`. The Linear key
- * never appears, and neither number is ever computed from the other.
+ * **The issue is named by its Linear key on a Linear-variant repo, `#N` elsewhere**
+ * (§6.5.1, ADR 0015), by the same `issueReference` the publisher uses. The key comes
+ * from the run's context, read from the linkback, and is never computed.
  *
  * **It ends at its last substantive line.** No attribution footer, no trailer, no
  * session URL. Phase 4 assembles bodies for `--body-file`, which walks straight
  * past the hook that reads `tool_input.command`, so the property is pinned here
  * where the string is built rather than where it is sent.
  */
-export function formatUnderspecifiedReport({ issue, shortName = null, reason, document = null, looked = [], runId = null }) {
-  // Inline rather than imported: publish-run.mjs imports this module, and its
-  // `issueReference` is the same one line.
-  const ref = shortName ? `${shortName}-${issue}` : `#${issue}`;
+export function formatUnderspecifiedReport({ issue, linear = null, reason, document = null, looked = [], runId = null }) {
+  const ref = issueReference(issue, linear);
   const lines = [
     `No acceptance criteria could be sourced for ${ref}, so this run implemented`,
     'nothing, pushed no branch and opened no pull request.',
@@ -667,7 +666,7 @@ export function formatUnderspecifiedReport({ issue, shortName = null, reason, do
  * step names, so a refusal naming no branch is a refusal that cannot be published
  * by a later step reading the field optimistically.
  */
-export function runGeneration({ repoRoot, runId, issue, worktree, branch, shortName = null, prompt, extraArgs = [] }, opts = {}) {
+export function runGeneration({ repoRoot, runId, issue, worktree, branch, linear = null, prompt, extraArgs = [] }, opts = {}) {
   const sourced = sourceAcceptanceCriteria(issue, { worktree });
   if (!sourced.ok) {
     return {
@@ -678,7 +677,7 @@ export function runGeneration({ repoRoot, runId, issue, worktree, branch, shortN
       published: false,
       outcome: OUTCOME_REPORTED,
       report: formatUnderspecifiedReport({
-        issue: issue?.number, shortName, reason: sourced.reason,
+        issue: issue?.number, linear, reason: sourced.reason,
         document: sourced.document ?? null, looked: sourced.looked ?? [], runId,
       }),
     };
@@ -698,7 +697,7 @@ export function runGeneration({ repoRoot, runId, issue, worktree, branch, shortN
       isolation: verified,
       report: formatUnderspecifiedReport({
         issue: issue?.number,
-        shortName,
+        linear,
         reason: verified.reason,
         looked: ['a live `git ls-remote`', 'a live `gh auth status`'],
         runId,

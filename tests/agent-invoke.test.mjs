@@ -643,13 +643,13 @@ test('AC 3 — a deliberately underspecified issue produces a report and no bran
 });
 
 test('the report names the issue in the repo\'s form, and never with a Linear key', () => {
-  // ADR 0014: `<short>-<N>` on a Linear-variant repo, `#N` on any other. The key
-  // never appears in prose, and is never computed from the GitHub number.
+  // ADR 0015: the Linear key on a Linear-variant repo, `#N` on any other. The key
+  // comes from the run's context, never computed from the GitHub number.
   const linear = formatUnderspecifiedReport({
-    issue: 193, shortName: 'daftplate', reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA,
+    issue: 193, linear: { linear: true, key: 'FORGE-512', repo: 'o/r' }, reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA,
   });
-  assert.match(linear, /sourced for daftplate-193,/);
-  assert.equal(/FORGE-|#193/.test(linear), false, 'the old form survived beside the new one');
+  assert.match(linear, /sourced for FORGE-512,/);
+  assert.equal(/daftplate-|#193/.test(linear), false, 'an old form survived beside the new one');
   const other = formatUnderspecifiedReport({ issue: 193, reason: INVOKE_REFUSALS.NO_ACCEPTANCE_CRITERIA });
   assert.match(other, /sourced for #193,/);
   assert.equal(/FORGE-|daftplate-/.test(other), false, 'an identifier was invented for a repo with no board');

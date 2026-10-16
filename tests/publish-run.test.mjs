@@ -32,7 +32,7 @@ import {
   isTestPath, isRunnableTest, classifyReproductionRun, assessReproduction, LOAD_FAILURE,
   issueReference, pullRequestTitle, formatPullRequestBody, formatNoReproductionComment,
   buildPushArgs, buildPrCreateArgs, buildIssueCommentArgs, bodyPath, reproductionPath,
-  replayEnv, publishRun, repoShortName,
+  replayEnv, publishRun,
 } from '../scripts/lib/publish-run.mjs';
 import {
   DEFENCE_IN_DEPTH_UNSET, INVOKE_REFUSALS, isolationPaths, isolatedEnv,
@@ -189,6 +189,10 @@ const LINEAR_ROADMAP = [
   '## Now',
   '',
 ].join('\n');
+
+/** A Linear-variant run whose linkback has landed, as the runner hands it over
+ *  (ADR 0015). The key is not derived from any number in this file. */
+const KEYED = Object.freeze({ linear: true, teamKey: 'FORGE', shortName: 'daftplate', key: 'FORGE-512', repo: 'o/r' });
 
 function fixtureRepo(files = { 'README.md': '# r\n' }) {
   const root = makeRepo(files);
@@ -371,11 +375,11 @@ test('the attribution tells live in this module only as the needles of a refusal
 test('every body the publisher assembles ends at its last substantive line', () => {
   const reproduction = { runnable: ['tests/thing.test.mjs'], tests: ['tests/thing.test.mjs'], replay: { detail: 'AssertionError' } };
   const pr = formatPullRequestBody({
-    issue: 193, shortName: 'daftplate', branch: 'fix/193-slug', baseCommit: 'abc1234def',
+    issue: 193, linear: KEYED, branch: 'fix/193-slug', baseCommit: 'abc1234def',
     headCommit: 'ffff0000', runId: 'fixer-193', criteria: ['the thing works'], reproduction, agentStatus: 0,
   });
   const comment = formatNoReproductionComment({
-    issue: 193, shortName: 'daftplate', reason: REPRODUCTION_REFUSALS.NO_TEST,
+    issue: 193, linear: KEYED, reason: REPRODUCTION_REFUSALS.NO_TEST,
     reproduction: { tests: [], baseCommit: 'abc1234def' }, runId: 'fixer-193', worktree: 'C:/runs/run-193',
   });
 
@@ -390,27 +394,39 @@ test('every body the publisher assembles ends at its last substantive line', () 
 });
 
 // ===========================================================================
-// The issue identifier (§6.5.1, ADR 0014), and where it may never go
+// The issue identifier (§6.5.1, ADR 0015), and where it may never go
 // ===========================================================================
 
-test('the Fixes footer is the bare GitHub number and the prose carries the short form', () => {
+test('the Fixes footer is the bare GitHub number and the prose carries the Linear key', () => {
   const reproduction = { runnable: ['tests/thing.test.mjs'], replay: { detail: 'AssertionError' } };
   const body = formatPullRequestBody({
-    issue: 193, shortName: 'daftplate', branch: 'fix/193-slug', baseCommit: 'abc1234def', reproduction,
+    issue: 193, linear: KEYED, branch: 'fix/193-slug', baseCommit: 'abc1234def', reproduction,
   });
   // §6.5.1 keeps the footer out of the identifier rule: it is machine-parsed,
-  // and `Fixes daftplate-193` closes nothing.
+  // and `Fixes FORGE-512` is not what closes the GitHub issue.
   const footer = body.trimEnd().split('\n').at(-1);
   assert.equal(footer, 'Fixes #193');
-  assert.equal(/Fixes[^\n]*daftplate-/.test(body), false, 'the short form reached a Fixes line');
-  // The prose above it names the issue the ADR 0014 way, and carries no key.
-  assert.match(body, /`daftplate-193`/);
-  assert.doesNotMatch(body, /FORGE-|#193 \(/);
+  assert.equal(/Fixes[^\n]*FORGE-/.test(body), false, 'the key reached a Fixes line');
+  // The prose above it names the issue the ADR 0015 way: the key, alone. Neither
+  // the retired short form nor the GitHub number stands beside it.
+  assert.match(body, /`FORGE-512`/);
+  assert.doesNotMatch(body, /daftplate-193|#193 \(|FORGE-512 \(/);
+  assert.equal(body.split('#193').length - 1, 1, 'the GitHub number appears outside the footer');
+});
+
+test('a Linear run whose linkback has not landed names the issue by its URL, marked pending', () => {
+  const reproduction = { runnable: ['tests/thing.test.mjs'], replay: { detail: 'AssertionError' } };
+  const body = formatPullRequestBody({
+    issue: 193, linear: { ...KEYED, key: null }, branch: 'fix/193-slug', baseCommit: 'abc1234def', reproduction,
+  });
+  assert.match(body, /https:\/\/github\.com\/o\/r\/issues\/193 \(pending Linear sync\)/);
+  assert.doesNotMatch(body, /FORGE-|daftplate-193/);
+  assert.equal(body.trimEnd().split('\n').at(-1), 'Fixes #193');
 });
 
 test('off a Linear board the publisher writes #N, exactly as before ADR 0014', () => {
   // Owner ruling: nothing changes outside the Linear variant.
-  assert.equal(issueReference(193, 'daftplate'), 'daftplate-193');
+  assert.equal(issueReference(193, KEYED), 'FORGE-512');
   assert.equal(issueReference(193), '#193');
   const reproduction = { runnable: ['tests/t.test.mjs'], replay: { detail: 'x' } };
   const body = formatPullRequestBody({ issue: 193, branch: 'fix/193-s', baseCommit: 'abc', reproduction });
@@ -420,19 +436,11 @@ test('off a Linear board the publisher writes #N, exactly as before ADR 0014', (
   assert.equal(/FORGE-|daftplate-/.test(comment), false, 'an identifier was invented for a repo with no board');
 });
 
-test('repoShortName reads the board, and only a Linear one with a slug', () => {
-  const linear = fixtureRepo({ 'ROADMAP.md': LINEAR_ROADMAP });
-  assert.equal(repoShortName(linear), 'daftplate');
-  const github = fixtureRepo({ 'ROADMAP.md': 'Board: the GitHub Project for this repository.\n' });
-  assert.equal(repoShortName(github), null);
-  assert.equal(repoShortName(fixtureRepo()), null, 'no ROADMAP.md is no board');
-  const display = fixtureRepo({ 'ROADMAP.md': LINEAR_ROADMAP.replace('[daftplate]', '[Daft Plate]') });
-  assert.equal(repoShortName(display), null, 'a display name was used as a short name');
-});
-
-test('the pull request title drops the short form, as §4.1 drops every issue reference', () => {
-  assert.equal(pullRequestTitle('fix/7-x', 'follow up daftplate-42 now', 'daftplate'), 'fix: follow up now');
-  assert.equal(pullRequestTitle('fix/7-x', 'cut daftplate-1.10.0', 'daftplate'), 'fix: cut daftplate-1.10.0',
+test('the pull request title drops the key and the retired short form, as §4.1 drops every reference', () => {
+  assert.equal(pullRequestTitle('fix/7-x', 'follow up FORGE-42 now', KEYED), 'fix: follow up now');
+  // An issue titled before ADR 0015 may still carry the short form.
+  assert.equal(pullRequestTitle('fix/7-x', 'follow up daftplate-42 now', KEYED), 'fix: follow up now');
+  assert.equal(pullRequestTitle('fix/7-x', 'cut daftplate-1.10.0', KEYED), 'fix: cut daftplate-1.10.0',
     'a version string is not an issue reference');
 });
 
@@ -1074,9 +1082,10 @@ test('the no-reproduction case opens nothing and files a comment instead', () =>
   // The comment says what happened and where the worktree is, and its body file
   // is outside the worktree — a file written inside it is untracked content that
   // makes Phase 2's reaper refuse the checkout as dirty.
-  // The board is read from the repo itself (ADR 0014): no caller supplies it.
-  assert.match(result.comment.body, /daftplate-7\b/);
-  assert.doesNotMatch(result.comment.body, /FORGE-/);
+  // The board is read from the repo itself: no caller supplied a context, and the
+  // publisher may not call gh to read a linkback, so the issue is pending.
+  assert.match(result.comment.body, /issue 7 \(pending Linear sync\)/);
+  assert.doesNotMatch(result.comment.body, /FORGE-|daftplate-7/);
   assert.match(result.comment.body, /pushed no branch and\nopened no pull request/);
   assert.match(result.comment.body, /test-passes-on-the-base-commit/);
   assert.equal(result.comment.path, bodyPath(repo, 'run-none', 'comment', io));
@@ -1100,7 +1109,7 @@ test('the reproduction case pushes for real and opens a draft pull request', () 
 
   const result = publishRun({
     repoRoot: repo, worktree: made.path, branch: 'fix/7-thing-breaks', issue: 7,
-    baseCommit: made.baseCommit, runId: 'run-pub',
+    baseCommit: made.baseCommit, runId: 'run-pub', linear: { ...KEYED, key: 'FORGE-77' },
     issueTitle: 'the thing breaks on save', criteria: ['saving does not break the thing'],
     generation: { ok: true, invoked: true, branch: 'fix/7-thing-breaks', agent: { status: 0 } },
   }, { ...io, gh: rec.gh });
@@ -1126,8 +1135,8 @@ test('the reproduction case pushes for real and opens a draft pull request', () 
   const onDisk = readFileSync(result.pr.path, 'utf8');
   assert.equal(onDisk, result.pr.body);
   assert.equal(onDisk.trimEnd().split('\n').at(-1), 'Fixes #7');
-  assert.match(onDisk, /`daftplate-7`/);
-  assert.doesNotMatch(onDisk, /FORGE-/);
+  assert.match(onDisk, /`FORGE-77`/);
+  assert.doesNotMatch(onDisk, /daftplate-7/);
   assert.equal(onDisk.trimEnd().split('\n').at(-1), 'Fixes #7', 'the footer left the bare GitHub number');
   assert.match(onDisk, /saving does not break the thing/);
   assert.match(onDisk, /tests\/thing\.test\.mjs/);

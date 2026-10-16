@@ -173,7 +173,7 @@ repos that need them.
 
 **Invocation:** `/dress <N…>`, "dress the issue", or "dress it in Linear". `/handoff` calls it before writing its note, and `standards-change` calls it after a flush.
 
-**Inputs / outputs:** `scripts/board.mjs <N> --wait` first reads the `ROADMAP.md` `Board:` line for the short name, team key and project. It reads priority from the issue template and waits up to three minutes for the sync's linkback comment, which supplies the Linear key. The session confirms that the Linear issue's GitHub attachment matches the requested issue, sets only missing values, and reads the issue back. If the caller supplied a milestone or blocking relations, it sets those too; otherwise it reports that they still need a human. Output is one line per issue in the repo's `<short>-<N>` form.
+**Inputs / outputs:** `scripts/board.mjs <N> --wait` first reads the `ROADMAP.md` `Board:` line for the short name, team key and project. It reads priority from the issue template and waits up to three minutes for the sync's linkback comment, which supplies the Linear key. The session confirms that the Linear issue's GitHub attachment matches the requested issue, sets only missing values, and reads the issue back. If the caller supplied a milestone or blocking relations, it sets those too; otherwise it reports that they still need a human. Output is one line per issue, naming it by its Linear key, or by its GitHub URL marked `(pending Linear sync)` when the linkback has not landed.
 
 **Failure modes:** With no `ROADMAP.md`, or when the `Board:` line does not name Linear, it produces no output, makes no GitHub or Linear request, and asks no question. It never fails its caller:
 

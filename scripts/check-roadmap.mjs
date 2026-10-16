@@ -223,10 +223,11 @@ export function checkRoadmap(dir) {
     ));
   }
 
-  // Rule 8. A Linear board's project link text is the repo's short name, and
-  // every issue the repo names is `<short>-<N>` (§6.5.1, ADR 0014), so it has to
-  // be a slug a reader can type and a validator can match. A display name such as
-  // `Daft Plate` would make the form unwritable. Placeholders are rule 7's, and
+  // Rule 8. A Linear board's project link text is the repo's short name: the
+  // Linear project /dress files issues into (§6.5.1, ADR 0014), and it was the
+  // prefix of the `<short>-<N>` form ADR 0015 retired. So it has to be a slug a
+  // reader can type and a validator can match. A display name such as
+  // `Daft Plate` would be neither. Placeholders are rule 7's, and
   // reported there only under `required`, so they are skipped here rather than
   // given two owners.
   if (boards === 1) {
@@ -238,14 +239,14 @@ export function checkRoadmap(dir) {
           ROADMAP_FILE,
           board.shortName === null
             ? 'the Linear `Board:` line has no `[name](url)` project link; its link text is the repo\'s short name (§6.5.1)'
-            : `the Linear \`Board:\` line's project link text \`${board.shortName}\` is not a lowercase slug; it is the repo's short name, written in every \`<short>-<N>\` (§6.5.1)`,
+            : `the Linear \`Board:\` line's project link text \`${board.shortName}\` is not a lowercase slug; it is the repo's short name, which names its Linear project (§6.5.1)`,
         ));
       }
       if (board.teamKey === null) {
         violations.push(violation(
           'roadmap-short-name',
           ROADMAP_FILE,
-          'the Linear `Board:` line names no backticked team key (team `KEY`); the launch-pad validator reads it to refuse Linear keys in prose',
+          'the Linear `Board:` line names no backticked team key (team `KEY`); it is the prefix of every Linear key, which prose names issues by (§6.5.1)',
         ));
       }
     }

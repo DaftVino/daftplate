@@ -41,7 +41,11 @@ const filed = (command, stdout = 'https://github.com/o/r/issues/380\n') => ({
 test('a gh issue create on a Linear board names the issue and the command to run', () => {
   const text = reminderFor(filed('gh issue create --title x --body-file b.md'), LINEAR);
   assert.match(text, /`\/dress 380`/);
-  assert.match(text, /daftplate-380/, 'the reminder names the issue in the repo\'s own form');
+  // ADR 0015: the issue is named by its Linear key, and at filing time the sync
+  // has not given it one yet. So the reminder names it by its URL, marked
+  // pending, and never by the retired `<short>-<N>`.
+  assert.match(text, /https:\/\/github\.com\/o\/r\/issues\/380 \(pending Linear sync\)/);
+  assert.doesNotMatch(text, /daftplate-380/, 'the reminder still writes the retired ADR 0014 form');
 });
 
 test('a compound command still reminds, because the filter is not the decision', () => {
